@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import logging
-from multiprocessing import Process
+import multiprocessing
+import os
+import subprocess
 
 from flask import Flask, jsonify, request
 from globus_action_provider_tools.authentication import TokenChecker
@@ -10,6 +12,7 @@ from globus_action_provider_tools.validation import (
 )
 from isodate import duration_isoformat, parse_duration, parse_datetime
 from openapi_core.wrappers.flask import FlaskOpenAPIResponse, FlaskOpenAPIRequest
+import requests
 
 from cfde_ap import CONFIG
 from . import error as err, utils
@@ -40,6 +43,10 @@ ROOT = "/"  # Segregate different APs by root path?
 TOKEN_CHECKER = TokenChecker(CONFIG["GLOBUS_ID"], CONFIG["GLOBUS_SECRET"],
                              [CONFIG["GLOBUS_SCOPE"]], CONFIG["GLOBUS_AUD"])
 
+
+#######################################
+# Flask helpers
+#######################################
 
 @app.errorhandler(err.ApiError)
 def handle_invalid_usage(error):
@@ -74,6 +81,10 @@ def after_request(response):
         raise err.DeveloperError("; ".join([str(err) for err in validation_result.errors]))
     return response
 
+
+#######################################
+# API Routes
+#######################################
 
 @app.route(ROOT, methods=["GET"])
 def meta():
@@ -164,34 +175,6 @@ def run():
         return jsonify(utils.translate_status(status))
 
 
-def start_action(action_id, action_data):
-    # No-op action
-    # TODO: Spawn Process instead
-
-    # To simulate failure, can set fail = True in body
-    success = not action_data.get("fail", False)
-    logger.info("No-op action performed: Success = {}".format(success))
-
-    # Update status
-    if success:
-        updates = {
-            "status": "SUCCEEDED",
-            "details": {
-                "message": "No-op performed"
-            }
-        }
-        utils.update_action_status(TBL, action_id, updates=updates)
-    else:
-        updates = {
-            "status": "FAILED",
-            "details": {
-                "message": "No-op not performed"
-            }
-        }
-        utils.update_action_status(TBL, action_id, updates=updates)
-    return
-
-
 @app.route(ROOT+"<action_id>/status", methods=["GET"])
 def status(action_id):
     status = utils.read_action_status(TBL, action_id)
@@ -215,13 +198,6 @@ def cancel(action_id):
     return jsonify(utils.translate_status(new_status))
 
 
-def cancel_action(action_id):
-    # This action doesn't implement cancellation,
-    # which is valid according to the Automate spec.
-    # This is a stub in case cancellation is implemented later.
-    return
-
-
 @app.route(ROOT+"<action_id>/release", methods=["POST"])
 def release(action_id):
     status = utils.read_action_status(TBL, action_id)
@@ -234,3 +210,140 @@ def release(action_id):
 
     utils.delete_action_status(TBL, action_id)
     return clean_status
+
+
+#######################################
+# Synchronous events
+#######################################
+
+def start_action(action_id, action_data):
+    logger.info("No-op action performed: Success = {}".format(success))
+
+    logger.info(f"{action_id}: Starting Deriva ingest")
+    # Spawn new process
+    # TODO: Process management
+    #       Currently assuming process manages itself
+    driver = multiprocessing.Process(target=restore_deriva, args=(action_id, url), name=action_id)
+    driver.start()
+    return
+
+
+def cancel_action(action_id):
+    # This action doesn't implement cancellation,
+    # which is valid according to the Automate spec.
+    # This is a stub in case cancellation is implemented later.
+    return
+
+
+#######################################
+# Asynchronous action
+#######################################
+
+def restore_deriva(action_id, url):
+    # Download backup zip file
+    # TODO: Determine file type
+    #       Use original file name (Content-Disposition)
+    #       Make filename unique if collision
+    #       Set better base path than local dir
+
+    # Excessive try-except blocks because there's (currently) no process management;
+    # if the action fails, it needs to always self-report failure
+
+    # Setup
+    try:
+        base_path = os.getcwd()
+        file_path = os.path.join(base_path, "cfde-backup.zip")
+    except Exception as e:
+        error_status = {
+            "status": "FAILED",
+            "details": {
+                "error": "Error in action setup: " + str(e)
+            }
+        }
+        # If update fails, last-ditch effort is write to error file for debugging
+        try:
+            update_action_status(TBL, action_id, error_status)
+        except Exception as e2:
+            with open("ERROR.log", 'w') as out:
+                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
+                          f"After error '{repr(e)}'")
+            return
+    # Download link
+    try:
+        with open(file_path, 'wb') as output:
+            output.write(requests.get(url).content)
+    except Exception as e:
+        error_status = {
+            "status": "FAILED",
+            "details": {
+                "error": f"Unable to download URL '{url}': {str(e)}"
+            }
+        }
+        try:
+            update_action_status(TBL, action_id, error_status)
+        except Exception as e2:
+            with open("ERROR.log", 'w') as out:
+                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
+                          f"After error '{repr(e)}'")
+            return
+
+    # TODO: Use package calls instead of subprocess
+    try:
+        restore_res = subprocess.run(["deriva-restore-cli", "--oauth2-token", token,
+                                      "demo.derivacloud.org", file_path], capture_output=True)
+        restore_message = restore_res.stderr + restore_res.stdout
+    except Exception as e:
+        error_status = {
+            "status": "FAILED",
+            "details": {
+                "error": f"Unable to run restore script: {str(e)}"
+            }
+        }
+        try:
+            update_action_status(TBL, action_id, error_status)
+        except Exception as e2:
+            with open("ERROR.log", 'w') as out:
+                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
+                          f"After error '{repr(e)}'")
+            return
+
+    # TODO: Check success, fetch ID without needing to parse output text
+    try:
+        if not b"completed successfully" in restore_message:
+            raise ValueError(f"DERIVA restore failed: {restore_message}")
+        deriva_link = (restore_message.split(b"Restore of catalog")[-1]
+                                      .split(b"completed successfully")[0].strip())
+        deriva_id = int(deriva_link.split(b"/")[-1])
+        deriva_samples = f"https://demo.derivacloud.org/chaise/recordset/#{deriva_id}/demo:Samples"
+    except Exception as e:
+        error_status = {
+            "status": "FAILED",
+            "details": {
+                "error": f"Restore script output parsing failed: {str(e)}"
+            }
+        }
+        try:
+            update_action_status(TBL, action_id, error_status)
+        except Exception as e2:
+            with open("ERROR.log", 'w') as out:
+                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
+                          f"After error '{repr(e)}'")
+            return
+
+    # Successful restore
+    status = {
+        "status": "SUCCEEDED",
+        "details": {
+            "deriva_id": deriva_id,
+            "deriva_samples_link": deriva_samples,
+            "message": "DERIVA restore successful"
+        }
+    }
+    try:
+        update_action_status(TBL, action_id, status)
+    except Exception as e:
+        with open("ERROR.log", 'w') as out:
+            out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
+                      f"After success on ID '{deriva_id}'")
+        return
+    return
