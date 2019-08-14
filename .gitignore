@@ -2,3 +2,4 @@
 *.log
 *.pyc
 *keys.py
+*cfde-backup*

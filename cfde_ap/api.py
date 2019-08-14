@@ -92,11 +92,20 @@ def meta():
         "types": ["Action"],
         "api_version": "1.0",
         "globus_auth_scope": CONFIG["GLOBUS_SCOPE"],
-        "title": "CFDE Dummy Action Provider",
+        "title": "CFDE Demo Deriva Ingest",
+        "subtitle": ("A Globus Automate Action Provider to demonstrate ingestion "
+                     "of a properly-formatted BDBag into DERIVA."),
+        # "description": "",
+        # "keywords": [],
         "visible_to": ["all_authenticated_users"],
         "runnable_by": ["all_authenticated_users"],
-        "log_supported": False,
+        # "administered_by": [],
+        # "admin_contact": "",
         "synchronous": False,
+        "log_supported": False,
+        # "maximum_deadline": "",
+        # "input_schema": {},
+        # "event_types": [],  # Event-type providers only
     }
     if not request.auth.check_authorization(resp["visible_to"],
                                             allow_all_authenticated_users=True):
@@ -217,8 +226,7 @@ def release(action_id):
 #######################################
 
 def start_action(action_id, action_data):
-    logger.info("No-op action performed: Success = {}".format(success))
-
+    url = action_data["url"]
     logger.info(f"{action_id}: Starting Deriva ingest")
     # Spawn new process
     # TODO: Process management
@@ -240,6 +248,9 @@ def cancel_action(action_id):
 #######################################
 
 def restore_deriva(action_id, url):
+    # TODO: Real auth
+    token = CONFIG["TEMP_TOKEN"]
+
     # Download backup zip file
     # TODO: Determine file type
     #       Use original file name (Content-Disposition)
@@ -262,7 +273,7 @@ def restore_deriva(action_id, url):
         }
         # If update fails, last-ditch effort is write to error file for debugging
         try:
-            update_action_status(TBL, action_id, error_status)
+            utils.update_action_status(TBL, action_id, error_status)
         except Exception as e2:
             with open("ERROR.log", 'w') as out:
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
@@ -280,7 +291,7 @@ def restore_deriva(action_id, url):
             }
         }
         try:
-            update_action_status(TBL, action_id, error_status)
+            utils.update_action_status(TBL, action_id, error_status)
         except Exception as e2:
             with open("ERROR.log", 'w') as out:
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
@@ -300,7 +311,7 @@ def restore_deriva(action_id, url):
             }
         }
         try:
-            update_action_status(TBL, action_id, error_status)
+            utils.update_action_status(TBL, action_id, error_status)
         except Exception as e2:
             with open("ERROR.log", 'w') as out:
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
@@ -323,7 +334,7 @@ def restore_deriva(action_id, url):
             }
         }
         try:
-            update_action_status(TBL, action_id, error_status)
+            utils.update_action_status(TBL, action_id, error_status)
         except Exception as e2:
             with open("ERROR.log", 'w') as out:
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
@@ -340,7 +351,7 @@ def restore_deriva(action_id, url):
         }
     }
     try:
-        update_action_status(TBL, action_id, status)
+        utils.update_action_status(TBL, action_id, status)
     except Exception as e:
         with open("ERROR.log", 'w') as out:
             out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
