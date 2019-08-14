@@ -330,4 +330,7 @@ def translate_status(raw_status):
         dict: The translated status.
     """
     # TODO
+    # DynamoDB stores int as Decimal, which isn't JSON-friendly
+    if raw_status.get("details", {}).get("deriva_id"):
+        raw_status["details"]["deriva_id"] = int(raw_status["details"]["deriva_id"])
     return raw_status
