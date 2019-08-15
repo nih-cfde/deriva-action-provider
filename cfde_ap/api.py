@@ -43,6 +43,9 @@ ROOT = "/"  # Segregate different APs by root path?
 TOKEN_CHECKER = TokenChecker(CONFIG["GLOBUS_ID"], CONFIG["GLOBUS_SECRET"],
                              [CONFIG["GLOBUS_SCOPE"]], CONFIG["GLOBUS_AUD"])
 
+# Clean up environment
+utils.clean_environment()
+
 
 #######################################
 # Flask helpers
@@ -104,7 +107,7 @@ def meta():
         "synchronous": False,
         "log_supported": False,
         # "maximum_deadline": "",
-        # "input_schema": {},
+        "input_schema": CONFIG["INPUT_SCHEMA"],
         # "event_types": [],  # Event-type providers only
     }
     if not request.auth.check_authorization(resp["visible_to"],
@@ -130,9 +133,6 @@ def run():
         # TODO: Accurately estimate completion time
         estimated_completion = datetime.now(tz=timezone.utc) + timedelta(days=1)
 
-        # The Automate spec says this should be an ISO8601 duration,
-        # but that is apparently out of date or changing.
-        # Number of seconds is permissable.
         default_release_after = timedelta(days=30)
         job = {
             # Start job as ACTIVE - no "waiting" status
@@ -248,22 +248,20 @@ def cancel_action(action_id):
 #######################################
 
 def restore_deriva(action_id, url):
-    # TODO: Real auth
-    token = CONFIG["TEMP_TOKEN"]
+    # TODO: If using user's token, replace this
+    token = utils.get_deriva_token()
 
     # Download backup zip file
     # TODO: Determine file type
     #       Use original file name (Content-Disposition)
     #       Make filename unique if collision
-    #       Set better base path than local dir
 
     # Excessive try-except blocks because there's (currently) no process management;
     # if the action fails, it needs to always self-report failure
 
     # Setup
     try:
-        base_path = os.getcwd()
-        file_path = os.path.join(base_path, "cfde-backup.zip")
+        file_path = os.path.join(CONFIG["DATA_DIR"], "cfde-backup.zip")
     except Exception as e:
         error_status = {
             "status": "FAILED",

@@ -34,6 +34,20 @@ DMO_SCHEMA = {
 }
 
 
+def clean_environment():
+    # Delete data dir and remake
+    try:
+        os.rmdir(CONFIG["DATA_DIR"])
+    except FileNotFoundError:
+        pass
+    os.makedirs(CONFIG["DATA_DIR"])
+    # Clear old exceptional error log
+    try:
+        os.remove("ERROR.log")
+    except FileNotFoundError:
+        pass
+
+
 def initialize_dmo_table(table_name, schema=DMO_SCHEMA, client=DMO_CLIENT):
     """Init a table in DynamoDB, by default the DMO_TABLE with DMO_SCHEMA.
     Currently not intended to be called in a script;
@@ -334,3 +348,8 @@ def translate_status(raw_status):
     if raw_status.get("details", {}).get("deriva_id"):
         raw_status["details"]["deriva_id"] = int(raw_status["details"]["deriva_id"])
     return raw_status
+
+
+def get_deriva_token():
+    # TODO: Fetch CC token, or use user's token
+    return CONFIG["TEMP_TOKEN"]
