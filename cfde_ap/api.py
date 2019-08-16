@@ -318,7 +318,7 @@ def restore_deriva(action_id, url):
 
     # TODO: Check success, fetch ID without needing to parse output text
     try:
-        if not b"completed successfully" in restore_message:
+        if b"completed successfully" not in restore_message:
             raise ValueError(f"DERIVA restore failed: {restore_message}")
         deriva_link = (restore_message.split(b"Restore of catalog")[-1]
                                       .split(b"completed successfully")[0].strip())
