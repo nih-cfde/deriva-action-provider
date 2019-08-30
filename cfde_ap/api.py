@@ -40,7 +40,7 @@ logger.info("\n\n==========CFDE Action Provider started==========\n")
 # Globals specific to this instance
 TBL = CONFIG["DEMO_DYNAMO_TABLE"]
 ROOT = "/"  # Segregate different APs by root path?
-TOKEN_CHECKER = TokenChecker(CONFIG["GLOBUS_ID"], CONFIG["GLOBUS_SECRET"],
+TOKEN_CHECKER = TokenChecker(CONFIG["GLOBUS_CC_APP"], CONFIG["GLOBUS_SECRET"],
                              [CONFIG["GLOBUS_SCOPE"]], CONFIG["GLOBUS_AUD"])
 
 # Clean up environment
@@ -101,7 +101,7 @@ def meta():
         # "description": "",
         # "keywords": [],
         "visible_to": ["all_authenticated_users"],
-        "runnable_by": ["all_authenticated_users"],
+        "runnable_by": ["urn:globus:groups:id:" + CONFIG["GLOBUS_GROUP"]],
         # "administered_by": [],
         # "admin_contact": "",
         "synchronous": False,
@@ -227,11 +227,13 @@ def release(action_id):
 
 def start_action(action_id, action_data):
     url = action_data["url"]
+    catalog = action_data.get("catalog")
     logger.info(f"{action_id}: Starting Deriva ingest")
     # Spawn new process
     # TODO: Process management
     #       Currently assuming process manages itself
-    driver = multiprocessing.Process(target=restore_deriva, args=(action_id, url), name=action_id)
+    driver = multiprocessing.Process(target=restore_deriva, args=(action_id, url, catalog),
+                                     name=action_id)
     driver.start()
     return
 
@@ -247,7 +249,7 @@ def cancel_action(action_id):
 # Asynchronous action
 #######################################
 
-def restore_deriva(action_id, url):
+def restore_deriva(action_id, url, catalog=None):
     # TODO: If using user's token, replace this
     token = utils.get_deriva_token()
 
@@ -277,6 +279,7 @@ def restore_deriva(action_id, url):
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
                           f"After error '{repr(e)}'")
             return
+    # TODO: Check that catalog exists - non-existent catalog will fail
     # Download link
     try:
         with open(file_path, 'wb') as output:
@@ -298,8 +301,21 @@ def restore_deriva(action_id, url):
 
     # TODO: Use package calls instead of subprocess
     try:
-        restore_res = subprocess.run(["deriva-restore-cli", "--oauth2-token", token,
-                                      "demo.derivacloud.org", file_path], capture_output=True)
+        restore_args = [
+            "deriva-restore-cli",
+            "--oauth2-token",
+            token
+        ]
+        if catalog is not None:
+            restore_args.extend([
+                "--catalog",
+                catalog
+            ])
+        restore_args.extend([
+            "demo.derivacloud.org",
+            file_path
+        ])
+        restore_res = subprocess.run(restore_args, capture_output=True)
         restore_message = restore_res.stderr + restore_res.stdout
     except Exception as e:
         error_status = {
@@ -314,7 +330,7 @@ def restore_deriva(action_id, url):
             with open("ERROR.log", 'w') as out:
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
                           f"After error '{repr(e)}'")
-            return
+        return
 
     # TODO: Check success, fetch ID without needing to parse output text
     try:

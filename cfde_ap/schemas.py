@@ -8,6 +8,10 @@ INPUT_SCHEMA = {
             "type": "string",
             "format": "uri",
             "description": "The URL of the DERIVA restore data."
+        },
+        "catalog": {
+            "type": "string",
+            "description": "The DERIVA catalog to restore into."
         }
     },
     "required": [
