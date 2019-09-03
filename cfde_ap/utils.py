@@ -1,9 +1,12 @@
 from copy import deepcopy
 import logging
+import os
+import shutil
 
 import boto3
 from boto3.dynamodb.conditions import Attr
 import bson  # For IDs
+import globus_sdk
 import mdf_toolbox
 
 from cfde_ap import CONFIG
@@ -32,6 +35,20 @@ DMO_SCHEMA = {
         "WriteCapacityUnits": 20
     }
 }
+
+
+def clean_environment():
+    # Delete data dir and remake
+    try:
+        shutil.rmtree(CONFIG["DATA_DIR"])
+    except FileNotFoundError:
+        pass
+    os.makedirs(CONFIG["DATA_DIR"])
+    # Clear old exceptional error log
+    try:
+        os.remove("ERROR.log")
+    except FileNotFoundError:
+        pass
 
 
 def initialize_dmo_table(table_name, schema=DMO_SCHEMA, client=DMO_CLIENT):
@@ -334,3 +351,15 @@ def translate_status(raw_status):
     if raw_status.get("details", {}).get("deriva_id"):
         raw_status["details"]["deriva_id"] = int(raw_status["details"]["deriva_id"])
     return raw_status
+
+
+def get_deriva_token():
+    # TODO: When decision is made about user auth vs. conf client auth, implement.
+    #       Currently using personal refresh token for scope.
+    #       Refresh token will expire in six months(?)
+    #       Date last generated: 8-30-2019
+
+    return globus_sdk.RefreshTokenAuthorizer(
+                        refresh_token=CONFIG["TEMP_REFRESH_TOKEN"],
+                        auth_client=globus_sdk.NativeAppAuthClient(CONFIG["GLOBUS_NATIVE_APP"])
+           ).access_token
