@@ -11,6 +11,7 @@ from globus_action_provider_tools.validation import (
     response_validator
 )
 from isodate import duration_isoformat, parse_duration, parse_datetime
+import jsonschema
 from openapi_core.wrappers.flask import FlaskOpenAPIResponse, FlaskOpenAPIRequest
 import requests
 
@@ -122,13 +123,16 @@ def run():
     # If request_id has been submitted before, return status instead of starting new
     try:
         status = utils.read_action_by_request(TBL, req["request_id"])
+    # Otherwise, create new action
     except err.NotFound:
-        # Create new action
-
-        # TODO: Validate request body, add schema to / return
-        body = req["body"]
-        if not body:
-            req["body"] = {}
+        # Validate input
+        body = req.get("body", {})
+        try:
+            jsonschema.validate(body, CONFIG["INPUT_SCHEMA"])
+        except jsonschema.ValidationError as e:
+            # Raise just the first line of the exception text, which contains the error
+            # The entire body and schema are in the text, but are verbose
+            raise err.InvalidRequest(str(e).split("\n")[0])
 
         # TODO: Accurately estimate completion time
         estimated_completion = datetime.now(tz=timezone.utc) + timedelta(days=1)
@@ -280,6 +284,7 @@ def restore_deriva(action_id, url, catalog=None):
                           f"After error '{repr(e)}'")
             return
     # TODO: Check that catalog exists - non-existent catalog will fail
+
     # Download link
     try:
         with open(file_path, 'wb') as output:
