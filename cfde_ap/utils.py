@@ -6,6 +6,8 @@ import shutil
 import boto3
 from boto3.dynamodb.conditions import Attr
 import bson  # For IDs
+from deriva.core import DerivaServer
+from deriva.core.ermrest_model import builtin_types, Table, Column, Key, ForeignKey
 import globus_sdk
 import mdf_toolbox
 
@@ -363,3 +365,129 @@ def get_deriva_token():
                         refresh_token=CONFIG["TEMP_REFRESH_TOKEN"],
                         auth_client=globus_sdk.NativeAppAuthClient(CONFIG["GLOBUS_NATIVE_APP"])
            ).access_token
+
+
+def create_deriva_catalog(servername, ermrest_schema, acls):
+    """Create catalog on server with given schema and set ACLs.
+
+    Arguments:
+        servername (str): The server hostname. Only HTTPS servers are supported.
+        ermrest_schema (dict): The ERMrest schema the catalog shoudl have.
+        acls (dict of lists of str): The ACLs to set on the catalog.
+
+    Returns:
+        int: The catalog ID.
+    """
+    # Format credentials in DerivaServer-expected format
+    creds = {
+        "bearer-token": get_deriva_token()
+    }
+    server = DerivaServer("https", servername, creds)
+    catalog = server.create_ermrest_catalog()
+    catalog.post("/schema", json=ermrest_schema).raise_for_status()
+    model = catalog.getCatalogModel()
+    model.acls.update(acls)
+
+    # TODO: Other config? (Chaise display params, etc.)
+
+    model.apply(catalog)
+
+    return catalog.catalog_id
+
+
+def convert_tableschema(tableschema, schema_name):
+    """Convert a TableSchema into ERMRest for a DERIVA catalog."""
+    resources = tableschema["resources"]
+    return {
+        "schemas": {
+            schema_name: {
+                "schema_name": schema_name,
+                "tables": {
+                    tdef["name"]: make_table(tdef, schema_name)
+                    for tdef in resources
+                }
+            }
+        }
+    }
+
+
+def make_table(tdef, schema_name, provide_system=True):
+    tname = tdef["name"]
+    keys = []
+    keysets = set()
+    pk = tdef.get("primaryKey")
+    if isinstance(pk, str):
+        pk = [pk]
+    if isinstance(pk, list):
+        keys.append(make_key(tname, pk, schema_name))
+        keysets.add(frozenset(pk))
+    return Table.define(
+        tname,
+        column_defs=[
+            make_column(cdef)
+            for cdef in tdef["fields"]
+        ],
+        key_defs=([make_key(tname, pk, schema_name)] if pk else []) + [
+            make_key(tname, [cdef["name"]], schema_name)
+            for cdef in tdef["fields"]
+            if cdef.get("constraints", {}).get("unique", False)
+            and frozenset([cdef["name"]]) not in keysets
+        ],
+        fkey_defs=[
+            make_fkey(tname, fkdef, schema_name)
+            for fkdef in tdef.get("foreignKeys", [])
+        ],
+        comment=tdef.get("description"),
+        provide_system=provide_system
+    )
+
+
+def make_type(col_type):
+    """Choose appropriate ERMrest column types..."""
+    if col_type == "string":
+        return builtin_types.text
+    elif col_type == "datetime":
+        return builtin_types.timestamptz
+    elif col_type == "integer":
+        return builtin_types.int8
+    elif col_type == "number":
+        return builtin_types.float8
+    elif col_type == "list":
+        # assume a list is a list of strings for now...
+        return builtin_types["text[]"]
+    else:
+        raise ValueError("Mapping undefined for type '{}'".format(col_type))
+
+
+def make_column(cdef):
+    constraints = cdef.get("constraints", {})
+    return Column.define(
+        cdef["name"],
+        make_type(cdef.get("type", "string")),
+        nullok=(not constraints.get("required", False)),
+        comment=cdef.get("description"),
+    )
+
+
+def make_key(tname, cols, schema_name):
+    return Key.define(
+        cols,
+        constraint_names=[[schema_name, "{}_{}_key".format(tname, "_".join(cols))]],
+    )
+
+
+def make_fkey(tname, fkdef, schema_name):
+    fkcols = fkdef["fields"]
+    fkcols = [fkcols] if isinstance(fkcols, str) else fkcols
+    reference = fkdef["reference"]
+    pktable = reference["resource"]
+    pktable = tname if pktable == "" else pktable
+    pkcols = reference["fields"]
+    pkcols = [pkcols] if isinstance(pkcols, str) else pkcols
+    return ForeignKey.define(
+        fkcols,
+        schema_name,
+        pktable,
+        pkcols,
+        constraint_names=[[schema_name, "{}_{}_fkey".format(tname, "_".join(fkcols))]],
+    )

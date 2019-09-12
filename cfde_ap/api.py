@@ -254,7 +254,6 @@ def cancel_action(action_id):
 #######################################
 
 def restore_deriva(action_id, url, catalog=None):
-    # TODO: If using user's token, replace this
     token = utils.get_deriva_token()
 
     # Download backup zip file
