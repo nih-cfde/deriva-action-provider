@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import json
 import logging
 import multiprocessing
 import os
@@ -12,6 +13,7 @@ from globus_action_provider_tools.validation import (
 )
 from isodate import duration_isoformat, parse_duration, parse_datetime
 import jsonschema
+import mdf_toolbox
 from openapi_core.wrappers.flask import FlaskOpenAPIResponse, FlaskOpenAPIRequest
 import requests
 
@@ -131,7 +133,7 @@ def run():
             jsonschema.validate(body, CONFIG["INPUT_SCHEMA"])
         except jsonschema.ValidationError as e:
             # Raise just the first line of the exception text, which contains the error
-            # The entire body and schema are in the text, but are verbose
+            # The entire body and schema are in the exception, which are too verbose
             raise err.InvalidRequest(str(e).split("\n")[0])
 
         # TODO: Accurately estimate completion time
@@ -230,15 +232,22 @@ def release(action_id):
 #######################################
 
 def start_action(action_id, action_data):
-    url = action_data["url"]
-    catalog = action_data.get("catalog")
-    logger.info(f"{action_id}: Starting Deriva ingest")
-    # Spawn new process
-    # TODO: Process management
-    #       Currently assuming process manages itself
-    driver = multiprocessing.Process(target=restore_deriva, args=(action_id, url, catalog),
-                                     name=action_id)
-    driver.start()
+    # Restore Action
+    if action_data.get("restore_url"):
+        logger.info(f"{action_id}: Starting Deriva restore")
+        # Spawn new process
+        # TODO: Process management
+        #       Currently assuming process manages itself
+        args = (action_id, action_data["restore_url"], action_data.get("restore_catalog"))
+        driver = multiprocessing.Process(target=restore_deriva, args=args, name=action_id)
+        driver.start()
+    # Ingest Action
+    elif action_data.get("ingest_url"):
+        logger.info(f"{action_id}: Starting Deriva new creation")
+        # Spawn new process
+        args = (action_id, action_data["ingest_url"], action_data.get("ingest_catalog_acls"))
+        driver = multiprocessing.Process(target=create_deriva, args=args, name=action_id)
+        driver.start()
     return
 
 
@@ -250,7 +259,7 @@ def cancel_action(action_id):
 
 
 #######################################
-# Asynchronous action
+# Asynchronous actions
 #######################################
 
 def restore_deriva(action_id, url, catalog=None):
@@ -374,5 +383,121 @@ def restore_deriva(action_id, url, catalog=None):
         with open("ERROR.log", 'w') as out:
             out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
                       f"After success on ID '{deriva_id}'")
+        return
+    return
+
+
+def create_deriva(action_id, url, acls=None):
+    # Download ingest BDBag
+    # TODO: Use original file name (Content-Disposition)
+    #       Make filename unique if collision
+
+    # Excessive try-except blocks because there's (currently) no process management;
+    # if the action fails, it needs to always self-report failure
+
+    # Setup
+    try:
+        if acls is None:
+            acls = CONFIG["DEFAULT_ACLS"]
+        parent_dir = os.path.join(CONFIG["DATA_DIR"], action_id)
+        os.mkdir(parent_dir)
+        archive_path = os.path.join(parent_dir, "cfde-ingest.zip")
+        data_path = os.path.join(parent_dir, "cfde-ingest/data/")
+    except Exception as e:
+        error_status = {
+            "status": "FAILED",
+            "details": {
+                "error": "Error in action setup: " + str(e)
+            }
+        }
+        # If update fails, last-ditch effort is write to error file for debugging
+        try:
+            utils.update_action_status(TBL, action_id, error_status)
+        except Exception as e2:
+            with open("ERROR.log", 'w') as out:
+                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
+                          f"After error '{repr(e)}'")
+            return
+
+    # Download and unarchive link
+    try:
+        with open(archive_path, 'wb') as output:
+            output.write(requests.get(url).content)
+            # Uncompresses archive_path into dir_path
+            mdf_toolbox.uncompress_tree(parent_dir)
+    except Exception as e:
+        error_status = {
+            "status": "FAILED",
+            "details": {
+                "error": f"Unable to download URL '{url}': {str(e)}"
+            }
+        }
+        try:
+            utils.update_action_status(TBL, action_id, error_status)
+        except Exception as e2:
+            with open("ERROR.log", 'w') as out:
+                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
+                          f"After error '{repr(e)}'")
+            return
+
+    # Read and convert TableSchema to ERMrest schema
+    # TODO: Will there be exactly on JSON file always? Currently assumed true.
+    try:
+        schema_file = [filename for filename in os.listdir(data_path)
+                       if filename.endswith(".json")][0]
+        with open(os.path.join(data_path, schema_file)) as f:
+            tableschema = json.load(f)
+        ermrest = utils.convert_tableschema(tableschema, "CFDE")
+    except Exception as e:
+        error_status = {
+            "status": "FAILED",
+            "details": {
+                "error": f"Could not read or convert TableSchema '{schema_file}'"
+            }
+        }
+        try:
+            utils.update_action_status(TBL, action_id, error_status)
+        except Exception as e2:
+            with open("ERROR.log", 'w') as out:
+                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
+                          f"After error '{repr(e)}'")
+            return
+
+    # Create new Deriva catalog
+    try:
+        catalog_id = utils.create_deriva_catalog(CONFIG["SERVER_NAME"], ermrest, acls)
+    except Exception as e:
+        error_status = {
+            "status": "FAILED",
+            "details": {
+                "error": f"Unable to create new DERIVA catalog: {str(e)}"
+            }
+        }
+        try:
+            utils.update_action_status(TBL, action_id, error_status)
+        except Exception as e2:
+            with open("ERROR.log", 'w') as out:
+                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
+                          f"After error '{repr(e)}'")
+            return
+
+    # TODO
+    # Add new entries into catalog
+
+    # Successful ingest
+    status = {
+        "status": "SUCCEEDED",
+        "details": {
+            "deriva_id": catalog_id,
+            # "deriva_samples_link": deriva_samples,
+            "message": "DERIVA ingest successful"
+        }
+    }
+    try:
+        utils.update_action_status(TBL, action_id, status)
+    except Exception as e:
+        with open("ERROR.log", 'w') as out:
+            out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
+                      f"After success on ID '{catalog_id}'")
         return
     return
