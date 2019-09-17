@@ -11,5 +11,5 @@ BASE_CONFIG = {
     "GLOBUS_AUD": "cfde_ap_demo",
     "GLOBUS_GROUP": "a437abe3-c9a4-11e9-b441-0efb3ba9a670",
     "DATA_DIR": os.path.join(os.path.dirname(__file__), "data"),
-    "SERVER_NAME": "demo.derivacloud.org"
+    "DERIVA_SERVER_NAME": "demo.derivacloud.org"
 }

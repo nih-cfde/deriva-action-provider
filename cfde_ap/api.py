@@ -67,7 +67,6 @@ def before_request():
     validation_result = request_validator.validate(wrapped_req)
     if validation_result.errors:
         raise err.InvalidRequest("; ".join([str(err) for err in validation_result.errors]))
-
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
     auth_state = TOKEN_CHECKER.check_token(token)
     if not auth_state.identities:
@@ -465,7 +464,7 @@ def create_deriva(action_id, url, acls=None):
 
     # Create new Deriva catalog
     try:
-        catalog_id = utils.create_deriva_catalog(CONFIG["SERVER_NAME"], ermrest, acls)
+        catalog_id = utils.create_deriva_catalog(CONFIG["DERIVA_SERVER_NAME"], ermrest, acls)
     except Exception as e:
         error_status = {
             "status": "FAILED",
