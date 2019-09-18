@@ -27,7 +27,8 @@ app.config.from_mapping(**CONFIG)
 app.url_map.strict_slashes = False
 
 # Logging setup
-logger = logging.getLogger("cfde_ap")
+#logger = logging.getLogger("cfde_ap")
+multiprocessing.get_logger("cfde_ap")
 logger.setLevel(CONFIG["LOG_LEVEL"])
 logger.propagate = False
 logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {name}: {message}",
@@ -121,20 +122,19 @@ def meta():
 @app.route(ROOT+"run", methods=["POST"])
 def run():
     req = request.get_json(force=True)
+    # Validate input
+    body = req.get("body", {})
+    try:
+        jsonschema.validate(body, CONFIG["INPUT_SCHEMA"])
+    except jsonschema.ValidationError as e:
+        # Raise just the first line of the exception text, which contains the error
+        # The entire body and schema are in the exception, which are too verbose
+        raise err.InvalidRequest(str(e).split("\n")[0])
     # If request_id has been submitted before, return status instead of starting new
     try:
         status = utils.read_action_by_request(TBL, req["request_id"])
     # Otherwise, create new action
     except err.NotFound:
-        # Validate input
-        body = req.get("body", {})
-        try:
-            jsonschema.validate(body, CONFIG["INPUT_SCHEMA"])
-        except jsonschema.ValidationError as e:
-            # Raise just the first line of the exception text, which contains the error
-            # The entire body and schema are in the exception, which are too verbose
-            raise err.InvalidRequest(str(e).split("\n")[0])
-
         # TODO: Accurately estimate completion time
         estimated_completion = datetime.now(tz=timezone.utc) + timedelta(days=1)
 
@@ -272,6 +272,7 @@ def restore_deriva(action_id, url, catalog=None):
     # Excessive try-except blocks because there's (currently) no process management;
     # if the action fails, it needs to always self-report failure
 
+    logger.debug(f"{action_id}: Deriva restore process started")
     # Setup
     try:
         file_path = os.path.join(CONFIG["DATA_DIR"], "cfde-backup.zip")
@@ -292,6 +293,7 @@ def restore_deriva(action_id, url, catalog=None):
             return
     # TODO: Check that catalog exists - non-existent catalog will fail
 
+    logger.debug(f"{action_id}: Downloading '{url}'")
     # Download link
     try:
         with open(file_path, 'wb') as output:
@@ -312,6 +314,7 @@ def restore_deriva(action_id, url, catalog=None):
             return
 
     # TODO: Use package calls instead of subprocess
+    logger.debug(f"{action_id}: Restoring with script")
     try:
         restore_args = [
             "deriva-restore-cli",
@@ -368,6 +371,7 @@ def restore_deriva(action_id, url, catalog=None):
             return
 
     # Successful restore
+    logger.debug(f"{action_id}:Restore complete")
     status = {
         "status": "SUCCEEDED",
         "details": {
@@ -394,6 +398,7 @@ def create_deriva(action_id, url, acls=None):
     # Excessive try-except blocks because there's (currently) no process management;
     # if the action fails, it needs to always self-report failure
 
+    logger.debug(f"{action_id}: Deriva creation process started")
     # Setup
     try:
         if acls is None:
@@ -419,6 +424,7 @@ def create_deriva(action_id, url, acls=None):
             return
 
     # Download and unarchive link
+    logger.debug(f"{action_id}: Downloading '{url}'")
     try:
         with open(archive_path, 'wb') as output:
             output.write(requests.get(url).content)
@@ -441,12 +447,13 @@ def create_deriva(action_id, url, acls=None):
 
     # Read and convert TableSchema to ERMrest schema
     # TODO: Will there be exactly on JSON file always? Currently assumed true.
+    logger.debug(f"{action_id}: Converting TableSchema to ERMrest")
     try:
         schema_file = [filename for filename in os.listdir(data_path)
                        if filename.endswith(".json")][0]
         with open(os.path.join(data_path, schema_file)) as f:
             tableschema = json.load(f)
-        ermrest = utils.convert_tableschema(tableschema, "CFDE")
+        ermrest = utils.convert_tableschema(tableschema, CONFIG["DERIVA_SCHEMA_NAME"])
     except Exception as e:
         error_status = {
             "status": "FAILED",
@@ -463,6 +470,7 @@ def create_deriva(action_id, url, acls=None):
             return
 
     # Create new Deriva catalog
+    logger.debug(f"{action_id}: Initializing new catalog")
     try:
         catalog_id = utils.create_deriva_catalog(CONFIG["DERIVA_SERVER_NAME"], ermrest, acls)
     except Exception as e:
@@ -480,15 +488,69 @@ def create_deriva(action_id, url, acls=None):
                           f"After error '{repr(e)}'")
             return
 
-    # TODO
     # Add new entries into catalog
+    logger.debug(f"{action_id}: Populating new catalog")
+    try:
+        for table in tableschema.get("resources", []):
+            # Convert TSV to Deriva JSON
+            try:
+                deriva_data = utils.convert_tabular(os.path.join(data_path, table["path"]))
+            except Exception as e:
+                missing_msg = "data file not provided in TableSchema"
+                error_status = {
+                    "status": "FAILED",
+                    "details": {
+                        "error": ("Unable to convert data file "
+                                  f"'{table.get('path', missing_msg)}': {str(e)}")
+                    }
+                }
+                # Error here caught by outer try/except
+                utils.update_action_status(TBL, action_id, error_status)
+            # Perform insert
+            insert_count = 0
+            insert_uris = []
+            try:
+                deriva_result = utils.insert_deriva_data(
+                                        CONFIG["DERIVA_SERVER_NAME"], catalog_id,
+                                        CONFIG["DERIVA_SCHEMA_NAME"], table["name"], deriva_data)
+                if not deriva_result["success"]:
+                    raise ValueError(deriva_result.get("error", "insertion unsuccessful"))
+                insert_count += deriva_result["num_inserted"]
+                insert_uris.append(deriva_result["uri"])
+            except Exception as e:
+                missing_msg = "table name not provided in TableSchema"
+                error_status = {
+                    "status": "FAILED",
+                    "details": {
+                        "error": ("Unable to insert data into table "
+                                  f"'{table.get('name', missing_msg)}': {str(e)}")
+                    }
+                }
+                utils.update_action_status(TBL, action_id, error_status)
+
+    except Exception as e:
+        error_status = {
+            "status": "FAILED",
+            "details": {
+                "error": f"Unable to populate new DERIVA catalog: {str(e)}"
+            }
+        }
+        try:
+            utils.update_action_status(TBL, action_id, error_status)
+        except Exception as e2:
+            with open("ERROR.log", 'w') as out:
+                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
+                          f"After error '{repr(e)}'")
+            return
 
     # Successful ingest
+    logger.debug(f"{action_id}: Catalog populated with {insert_count} entries")
     status = {
         "status": "SUCCEEDED",
         "details": {
             "deriva_id": catalog_id,
-            # "deriva_samples_link": deriva_samples,
+            "number_ingested": insert_count,
+            "deriva_uris": insert_uris,
             "message": "DERIVA ingest successful"
         }
     }

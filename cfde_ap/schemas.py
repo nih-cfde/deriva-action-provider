@@ -82,16 +82,13 @@ INPUT_SCHEMA = {
                             "description": "One UUID"
                         }
                     }
-                },
-                "required": [
-                ]
+                }
             }
         },
         "required": [
             "ingest_url"
         ]
-    }],
-    "additionalProperties": False
+    }]
 }
 
 # TODO
