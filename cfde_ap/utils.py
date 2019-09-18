@@ -1,4 +1,5 @@
 from copy import deepcopy
+import csv
 import logging
 import os
 import shutil
@@ -6,7 +7,7 @@ import shutil
 import boto3
 from boto3.dynamodb.conditions import Attr
 import bson  # For IDs
-from deriva.core import DerivaServer
+from deriva.core import DerivaServer, ErmrestCatalog
 from deriva.core.ermrest_model import builtin_types, Table, Column, Key, ForeignKey
 import globus_sdk
 import mdf_toolbox
@@ -395,6 +396,67 @@ def create_deriva_catalog(servername, ermrest_schema, acls):
     return catalog.catalog_id
 
 
+def insert_deriva_data(servername, catalog, schema_name, table_name, data):
+    """Insert data into DERIVA.
+
+    Arguments:
+        servername (str): The name of the DERIVA server.
+        catalog (str): The catalog ID.
+        schema_name (str): The name of the schema being inserted.
+        table_name (str): The name of the table being inserted into.
+        data (list): The data to insert.
+
+    Returns:
+        #TODO
+    """
+    if type(schema_name) is not str:
+        raise TypeError("schema_name must be a string")
+    elif type(table_name) is not str:
+        raise TypeError("table_name must be a string")
+
+    # Format credentials in DerivaServer-expected format
+    creds = {
+        "bearer-token": get_deriva_token()
+    }
+    catalog = ErmrestCatalog("https", servername, catalog, credentials=creds)
+    pb = catalog.getPathBuilder()  # noqa: F841 (pb unused - it's used, but in an eval())
+    # Using eval() because DataPaths are dot-notated in DERIVA
+    # Sanitize schema_name and table_name first.
+    # It is not expected that malicious payloads will be loaded here,
+    # but it's better to have some low level of protection at least.
+    remove_list = [" ", "\n", "\t", ".", "(", ")"]
+    for char in remove_list:
+        schema_name = schema_name.replace(char, "")
+        table_name = table_name.replace(char, "")
+    table = eval(f"pb.{schema_name}.{table_name}")
+
+    try:
+        res = table.insert(data)
+    except Exception:
+        # TODO: Error handling
+        raise
+
+    return {
+        "success": True,
+        "num_inserted": len(res),
+        "uri": res.uri
+    }
+
+
+def convert_tabular(path):
+    """Read a tabular data file and return OrderedDict results.
+
+    Arguments:
+        path (str): The path to the data file.
+
+    Returns:
+        list of OrderedDict: The data.
+    """
+    dialect = "excel-tab" if path.endswith(".tsv") else "excel"
+    with open(path, newline='') as f:
+        return [row for row in csv.DictReader(f, dialect=dialect)]
+
+
 def convert_tableschema(tableschema, schema_name):
     """Convert a TableSchema into ERMRest for a DERIVA catalog."""
     resources = tableschema["resources"]
@@ -413,6 +475,7 @@ def convert_tableschema(tableschema, schema_name):
 
 def make_table(tdef, schema_name, provide_system=True):
     tname = tdef["name"]
+    tdef = tdef["schema"]
     keys = []
     keysets = set()
     pk = tdef.get("primaryKey")
@@ -425,11 +488,11 @@ def make_table(tdef, schema_name, provide_system=True):
         tname,
         column_defs=[
             make_column(cdef)
-            for cdef in tdef["fields"]
+            for cdef in tdef.get("fields", [])
         ],
         key_defs=([make_key(tname, pk, schema_name)] if pk else []) + [
             make_key(tname, [cdef["name"]], schema_name)
-            for cdef in tdef["fields"]
+            for cdef in tdef.get("fields", [])
             if cdef.get("constraints", {}).get("unique", False)
             and frozenset([cdef["name"]]) not in keysets
         ],
@@ -448,6 +511,8 @@ def make_type(col_type):
         return builtin_types.text
     elif col_type == "datetime":
         return builtin_types.timestamptz
+    elif col_type == "date":
+        return builtin_types.date
     elif col_type == "integer":
         return builtin_types.int8
     elif col_type == "number":
