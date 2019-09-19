@@ -13,7 +13,6 @@ from globus_action_provider_tools.validation import (
 )
 from isodate import duration_isoformat, parse_duration, parse_datetime
 import jsonschema
-import mdf_toolbox
 from openapi_core.wrappers.flask import FlaskOpenAPIResponse, FlaskOpenAPIRequest
 import requests
 
@@ -27,8 +26,8 @@ app.config.from_mapping(**CONFIG)
 app.url_map.strict_slashes = False
 
 # Logging setup
-#logger = logging.getLogger("cfde_ap")
-multiprocessing.get_logger("cfde_ap")
+# logger = logging.getLogger("cfde_ap")
+logger = multiprocessing.get_logger()
 logger.setLevel(CONFIG["LOG_LEVEL"])
 logger.propagate = False
 logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {name}: {message}",
@@ -290,7 +289,7 @@ def restore_deriva(action_id, url, catalog=None):
             with open("ERROR.log", 'w') as out:
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
                           f"After error '{repr(e)}'")
-            return
+        return
     # TODO: Check that catalog exists - non-existent catalog will fail
 
     logger.debug(f"{action_id}: Downloading '{url}'")
@@ -311,7 +310,7 @@ def restore_deriva(action_id, url, catalog=None):
             with open("ERROR.log", 'w') as out:
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
                           f"After error '{repr(e)}'")
-            return
+        return
 
     # TODO: Use package calls instead of subprocess
     logger.debug(f"{action_id}: Restoring with script")
@@ -368,7 +367,7 @@ def restore_deriva(action_id, url, catalog=None):
             with open("ERROR.log", 'w') as out:
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
                           f"After error '{repr(e)}'")
-            return
+        return
 
     # Successful restore
     logger.debug(f"{action_id}:Restore complete")
@@ -386,7 +385,6 @@ def restore_deriva(action_id, url, catalog=None):
         with open("ERROR.log", 'w') as out:
             out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
                       f"After success on ID '{deriva_id}'")
-        return
     return
 
 
@@ -403,10 +401,7 @@ def create_deriva(action_id, url, acls=None):
     try:
         if acls is None:
             acls = CONFIG["DEFAULT_ACLS"]
-        parent_dir = os.path.join(CONFIG["DATA_DIR"], action_id)
-        os.mkdir(parent_dir)
-        archive_path = os.path.join(parent_dir, "cfde-ingest.zip")
-        data_path = os.path.join(parent_dir, "cfde-ingest/data/")
+        data_dir = os.path.join(CONFIG["DATA_DIR"], action_id)
     except Exception as e:
         error_status = {
             "status": "FAILED",
@@ -421,15 +416,14 @@ def create_deriva(action_id, url, acls=None):
             with open("ERROR.log", 'w') as out:
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
                           f"After error '{repr(e)}'")
-            return
+        return
 
     # Download and unarchive link
     logger.debug(f"{action_id}: Downloading '{url}'")
     try:
-        with open(archive_path, 'wb') as output:
-            output.write(requests.get(url).content)
-            # Uncompresses archive_path into dir_path
-            mdf_toolbox.uncompress_tree(parent_dir)
+        dl_res = utils.download_data(None, [url], CONFIG["LOCAL_EP"], data_dir)
+        if not dl_res["success"]:
+            raise ValueError(str(dl_res))
     except Exception as e:
         error_status = {
             "status": "FAILED",
@@ -443,15 +437,21 @@ def create_deriva(action_id, url, acls=None):
             with open("ERROR.log", 'w') as out:
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
                           f"After error '{repr(e)}'")
-            return
+        return
 
     # Read and convert TableSchema to ERMrest schema
     # TODO: Will there be exactly on JSON file always? Currently assumed true.
     logger.debug(f"{action_id}: Converting TableSchema to ERMrest")
+    schema_file = "File not found"
     try:
-        schema_file = [filename for filename in os.listdir(data_path)
+        # Get BDBag extract dir (assume exactly one dir)
+        bdbag_dir = [dirname for dirname in os.listdir(data_dir)
+                     if os.isdir(os.path.join(data_dir, dirname))][0]
+        bdbag_data = os.path.join(bdbag_dir, "data")
+        # Get schema file (assume exactly one JSON file
+        schema_file = [filename for filename in os.listdir(bdbag_data)
                        if filename.endswith(".json")][0]
-        with open(os.path.join(data_path, schema_file)) as f:
+        with open(os.path.join(bdbag_data, schema_file)) as f:
             tableschema = json.load(f)
         ermrest = utils.convert_tableschema(tableschema, CONFIG["DERIVA_SCHEMA_NAME"])
     except Exception as e:
@@ -467,7 +467,7 @@ def create_deriva(action_id, url, acls=None):
             with open("ERROR.log", 'w') as out:
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
                           f"After error '{repr(e)}'")
-            return
+        return
 
     # Create new Deriva catalog
     logger.debug(f"{action_id}: Initializing new catalog")
@@ -486,7 +486,7 @@ def create_deriva(action_id, url, acls=None):
             with open("ERROR.log", 'w') as out:
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
                           f"After error '{repr(e)}'")
-            return
+        return
 
     # Add new entries into catalog
     logger.debug(f"{action_id}: Populating new catalog")
@@ -494,7 +494,7 @@ def create_deriva(action_id, url, acls=None):
         for table in tableschema.get("resources", []):
             # Convert TSV to Deriva JSON
             try:
-                deriva_data = utils.convert_tabular(os.path.join(data_path, table["path"]))
+                deriva_data = utils.convert_tabular(os.path.join(bdbag_data, table["path"]))
             except Exception as e:
                 missing_msg = "data file not provided in TableSchema"
                 error_status = {
@@ -506,6 +506,7 @@ def create_deriva(action_id, url, acls=None):
                 }
                 # Error here caught by outer try/except
                 utils.update_action_status(TBL, action_id, error_status)
+                return
             # Perform insert
             insert_count = 0
             insert_uris = []
@@ -527,6 +528,7 @@ def create_deriva(action_id, url, acls=None):
                     }
                 }
                 utils.update_action_status(TBL, action_id, error_status)
+                return
 
     except Exception as e:
         error_status = {
@@ -541,7 +543,7 @@ def create_deriva(action_id, url, acls=None):
             with open("ERROR.log", 'w') as out:
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
                           f"After error '{repr(e)}'")
-            return
+        return
 
     # Successful ingest
     logger.debug(f"{action_id}: Catalog populated with {insert_count} entries")
@@ -560,5 +562,4 @@ def create_deriva(action_id, url, acls=None):
         with open("ERROR.log", 'w') as out:
             out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
                       f"After success on ID '{catalog_id}'")
-        return
     return

@@ -3,6 +3,7 @@ import csv
 import logging
 import os
 import shutil
+import urllib
 
 import boto3
 from boto3.dynamodb.conditions import Attr
@@ -11,6 +12,7 @@ from deriva.core import DerivaServer, ErmrestCatalog
 from deriva.core.ermrest_model import builtin_types, Table, Column, Key, ForeignKey
 import globus_sdk
 import mdf_toolbox
+import requests
 
 from cfde_ap import CONFIG
 from . import error as err
@@ -366,6 +368,189 @@ def get_deriva_token():
                         refresh_token=CONFIG["TEMP_REFRESH_TOKEN"],
                         auth_client=globus_sdk.NativeAppAuthClient(CONFIG["GLOBUS_NATIVE_APP"])
            ).access_token
+
+
+def download_data(transfer_client, source_loc, local_ep, local_path):
+    """Download data from a remote host to the configured machine.
+    (Many sources to one destination)
+
+    Arguments:
+        transfer_client (TransferClient): An authenticated TransferClient with access to the data.
+                                          Technically unnecessary for non-Globus data locations.
+        source_loc (list of str): The location(s) of the data.
+        local_ep (str): The local machine's endpoint ID.
+        local_path (str): The path to the local storage location.
+
+    Returns:
+        dict: success (bool): True on success, False on failure.
+    """
+    filename = None
+    # If the local_path is a file and not a directory, use the directory
+    if local_path[-1] != "/":
+        # Save the filename for later
+        filename = os.path.basename(local_path)
+        local_path = os.path.dirname(local_path) + "/"
+
+    os.makedirs(local_path, exist_ok=True)
+    if not isinstance(source_loc, list):
+        source_loc = [source_loc]
+
+    # Download data locally
+    for raw_loc in source_loc:
+        location = normalize_globus_uri(raw_loc)
+        loc_info = urllib.parse.urlparse(location)
+        # Globus Transfer
+        if loc_info.scheme == "globus":
+            if filename:
+                transfer_path = os.path.join(local_path, filename)
+            else:
+                transfer_path = local_path
+            # Check that data not already in place
+            if (loc_info.netloc != local_ep
+                    and loc_info.path != transfer_path):
+                # Transfer locally
+                transfer = mdf_toolbox.custom_transfer(
+                                transfer_client, loc_info.netloc, local_ep,
+                                [(loc_info.path, transfer_path)],
+                                interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                                inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
+                for event in transfer:
+                    if not event["success"]:
+                        logger.info("Transfer is_error: {} - {}"
+                                    .format(event.get("code", "No code found"),
+                                            event.get("description", "No description found")))
+                if not event["success"]:
+                    logger.error("Transfer failed: {}".format(event))
+                    raise ValueError(event)
+        # HTTP(S)
+        elif loc_info.scheme.startswith("http"):
+            # Get default filename and extension
+            http_filename = os.path.basename(loc_info.path)
+            if not http_filename:
+                http_filename = "archive"
+            ext = os.path.splitext(http_filename)[1]
+            if not ext:
+                ext = ".archive"
+
+            # Fetch file
+            res = requests.get(location)
+            # Get filename from header if present
+            con_disp = res.headers.get("Content-Disposition", "")
+            filename_start = con_disp.find("filename=")
+            if filename_start >= 0:
+                filename_end = con_disp.find(";", filename_start)
+                if filename_end < 0:
+                    filename_end = None
+                http_filename = con_disp[filename_start+len("filename="):filename_end]
+                http_filename = http_filename.strip("\"'; ")
+
+            # Create path for file
+            archive_path = os.path.join(local_path, filename or http_filename)
+            # Make filename unique if filename is duplicate
+            collisions = 0
+            while os.path.exists(archive_path):
+                # Save and remove extension
+                archive_path, ext = os.path.splitext(archive_path)
+                old_add = "({})".format(collisions)
+                collisions += 1
+                new_add = "({})".format(collisions)
+                # If added number already, remove before adding new number
+                if archive_path.endswith(old_add):
+                    archive_path = archive_path[:-len(old_add)]
+                # Add "($num_collisions)" to end of filename to make filename unique
+                archive_path = archive_path + new_add + ext
+
+            # Download and save file
+            with open(archive_path, 'wb') as out:
+                out.write(res.content)
+            logger.debug("Downloaded HTTP file: {}".format(archive_path))
+        # Not supported
+        else:
+            # Nothing to do
+            raise IOError("Invalid data location: '{}' is not a recognized protocol "
+                          "(from {}).".format(loc_info.scheme, str(location)))
+
+    # Extract all archives, delete extracted archives
+    extract_res = mdf_toolbox.uncompress_tree(local_path, delete_archives=True)
+    if not extract_res["success"]:
+        raise IOError("Unable to extract archives in dataset")
+
+    return {
+        "success": True,
+        "num_extracted": extract_res["num_extracted"],
+        "total_files": sum([len(files) for _, _, files in os.walk(local_path)])
+    }
+
+
+def normalize_globus_uri(location):
+    """Normalize a Globus Web App link or Google Drive URI into a globus:// URI.
+    For Google Drive URIs, the file(s) must be shared with
+    materialsdatafacility@gmail.com.
+    If the URI is not a Globus Web App link or Google Drive URI,
+    it is returned unchanged.
+    Arguments:
+        location (str): One URI to normalize.
+    Returns:
+        str: The normalized URI, or the original URI if no normalization was possible.
+    """
+    loc_info = urllib.parse.urlparse(location)
+    # Globus Web App link into globus:// form
+    if (location.startswith("https://www.globus.org/app/transfer")
+            or location.startswith("https://app.globus.org/file-manager")):
+        data_info = urllib.parse.unquote(loc_info.query)
+        # EP ID is in origin or dest
+        ep_start = data_info.find("origin_id=")
+        if ep_start < 0:
+            ep_start = data_info.find("destination_id=")
+            if ep_start < 0:
+                raise ValueError("Invalid Globus Transfer UI link")
+            else:
+                ep_start += len("destination_id=")
+        else:
+            ep_start += len("origin_id=")
+        ep_end = data_info.find("&", ep_start)
+        if ep_end < 0:
+            ep_end = len(data_info)
+        ep_id = data_info[ep_start:ep_end]
+
+        # Same for path
+        path_start = data_info.find("origin_path=")
+        if path_start < 0:
+            path_start = data_info.find("destination_path=")
+            if path_start < 0:
+                raise ValueError("Invalid Globus Transfer UI link")
+            else:
+                path_start += len("destination_path=")
+        else:
+            path_start += len("origin_path=")
+        path_end = data_info.find("&", path_start)
+        if path_end < 0:
+            path_end = len(data_info)
+        path = data_info[path_start:path_end]
+
+        # Make new location
+        new_location = "globus://{}{}".format(ep_id, path)
+
+    # Google Drive protocol into globus:// form
+    elif loc_info.scheme in ["gdrive", "google", "googledrive"]:
+        # Correct form is "google:///path/file.dat"
+        # (three slashes - two for scheme end, one for path start)
+        # But if a user uses two slashes, the netloc will incorrectly be the top dir
+        # (netloc="path", path="/file.dat")
+        # Otherwise netloc is nothing (which is correct)
+        if loc_info.netloc:
+            gpath = "/" + loc_info.netloc + loc_info.path
+        else:
+            gpath = loc_info.path
+        # Don't use os.path.join because gpath starts with /
+        # GDRIVE_ROOT does not end in / to make compatible
+        new_location = "globus://{}{}{}".format(CONFIG["GDRIVE_EP"], CONFIG["GDRIVE_ROOT"], gpath)
+
+    # Default - do nothing
+    else:
+        new_location = location
+
+    return new_location
 
 
 def create_deriva_catalog(servername, ermrest_schema, acls):
