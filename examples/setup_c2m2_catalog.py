@@ -57,6 +57,8 @@ dp.set_catalog(catalog)
 dp.provision()
 print("Model deployed for %s." % (dp.filename,))
 
+# set acls
+dp.apply_acls()
 
 ## load some sample data?
 dp.load_data_files()

@@ -125,7 +125,7 @@ class CfdeDataPackage (object):
 
         self.get_model()
 
-    def apply_custom_config(self):
+    def apply_acls(self):
         self.get_model()
         self.model_root.acls.update(self.catalog_acls)
 
@@ -133,86 +133,6 @@ class CfdeDataPackage (object):
         self.model_root.annotations[tag.chaise_config] = {
             # hide system metadata by default in tabular listings, to focus on CFDE-specific content
             "SystemColumnsDisplayCompact": [],
-        }
-
-        # have Chaise display underscores in model element names as whitespace
-        self.cfde_schema.display.name_style = {"underline_space": True}
-
-        # prettier display of built-in ERMrest_Client table entries
-        self.model_root.table('public', 'ERMrest_Client').table_display.row_name = {
-            "row_markdown_pattern": "{{{Full_Name}}} ({{{Display_Name}}})"
-        }
-
-        def find_fkey(from_table, from_columns):
-            from_table = self.model_root.table("CFDE", from_table)
-            if isinstance(from_columns, str):
-                from_columns = [from_columns]
-            for fkey in from_table.foreign_keys:
-                if set(from_columns) == set([ c['column_name'] for c in fkey.foreign_key_columns ]):
-                    return fkey
-            raise KeyError(from_columns)
-
-        def assoc_source(markdown_name, assoc_table, left_columns, right_columns, **kwargs):
-            d = {
-                "source": [
-                    {"inbound": find_fkey(assoc_table, left_columns).names[0]},
-                    {"outbound": find_fkey(assoc_table, right_columns).names[0]},
-                    "RID"
-                ],
-                "markdown_name": markdown_name,
-            }
-            d.update(kwargs)
-            return d
-
-        ds_to_file = [
-            {"inbound": find_fkey("FilesInDatasets", "DatasetID").names[0]},
-            {"outbound": find_fkey("FilesInDatasets", "FileID").names[0]},
-        ]
-
-        ds_to_devent = ds_to_file + [
-            {"inbound": find_fkey("ProducedBy", "FileID").names[0]},
-            {"outbound": find_fkey("ProducedBy", "DataEventID").names[0]},
-        ]
-
-        ds_to_bsamp = ds_to_devent + [
-            {"inbound": find_fkey("AssayedBy", "DataEventID").names[0]},
-            {"outbound": find_fkey("AssayedBy", "BioSampleID").names[0]},
-        ]
-        
-        # improve Dataset with pseudo columns?
-        sponsors = assoc_source(
-            "Sponsors", "SponsoredBy", ["DatasetID"], ["OrganizationID"],
-            aggregate="array", array_display="ulist"
-        )
-        
-        self.model_root.table('CFDE', 'Dataset').annotations[tag.visible_columns] = {
-            "compact": ["title", sponsors, "description", "url"],
-            "detailed": ["id", "title", sponsors, "url", "description"],
-            "filter": {"and": [
-                "title",
-                #sponsors,
-                "description",
-                "url",
-                {
-                    "markdown_name": "Data Method",
-                    "source": ds_to_devent + [ {"outbound": find_fkey("DataEvent", "method").names[0]}, "RID" ]
-                },
-                {
-                    "markdown_name": "Data Platform",
-                    "source": ds_to_devent + [ {"outbound": find_fkey("DataEvent", "platform").names[0]}, "RID" ]
-                },
-                {
-                    "markdown_name": "Data Protocol",
-                    "source": ds_to_devent + [ {"outbound": find_fkey("DataEvent", "protocol").names[0]}, "RID" ]
-                },
-                {
-                    "markdown_name": "Biosample Type",
-                    "source": ds_to_bsamp + [ {"outbound": find_fkey("BioSample", "sample_type").names[0]}, "RID" ]
-                },
-                assoc_source("Parent Datasets", "DatasetsInDatasets", ["ContainedDatasetID"], ["ContainingDatasetID"]),
-                assoc_source("Child Datasets", "DatasetsInDatasets", ["ContainingDatasetID"], ["ContainedDatasetID"]),
-                assoc_source("Files", "FilesInDatasets", ["DatasetID"], ["FileID"]),
-            ]}
         }
 
         ## apply the above ACL and annotation changes to server
