@@ -1,16 +1,22 @@
 from copy import deepcopy
+# import csv
 import logging
 import os
 import shutil
+import urllib
 
 import boto3
 from boto3.dynamodb.conditions import Attr
 import bson  # For IDs
+from deriva.core import DerivaServer  # , ErmrestCatalog
+# from deriva.core.ermrest_model import builtin_types, Table, Column, Key, ForeignKey
 import globus_sdk
 import mdf_toolbox
+import requests
 
 from cfde_ap import CONFIG
 from . import error as err
+from .cfde_datapackage import CfdeDataPackage
 
 
 logger = logging.getLogger(__name__)
@@ -363,3 +369,409 @@ def get_deriva_token():
                         refresh_token=CONFIG["TEMP_REFRESH_TOKEN"],
                         auth_client=globus_sdk.NativeAppAuthClient(CONFIG["GLOBUS_NATIVE_APP"])
            ).access_token
+
+
+def download_data(transfer_client, source_loc, local_ep, local_path):
+    """Download data from a remote host to the configured machine.
+    (Many sources to one destination)
+
+    Arguments:
+        transfer_client (TransferClient): An authenticated TransferClient with access to the data.
+                                          Technically unnecessary for non-Globus data locations.
+        source_loc (list of str): The location(s) of the data.
+        local_ep (str): The local machine's endpoint ID.
+        local_path (str): The path to the local storage location.
+
+    Returns:
+        dict: success (bool): True on success, False on failure.
+    """
+    filename = None
+    # If the local_path is a file and not a directory, use the directory
+    if ((os.path.exists(local_path) and not os.path.isdir(local_path))
+            or (not os.path.exists(local_path) and local_path[-1] != "/")):
+        # Save the filename for later
+        filename = os.path.basename(local_path)
+        local_path = os.path.dirname(local_path) + "/"
+
+    os.makedirs(local_path, exist_ok=True)
+    if not isinstance(source_loc, list):
+        source_loc = [source_loc]
+
+    # Download data locally
+    for raw_loc in source_loc:
+        location = normalize_globus_uri(raw_loc)
+        loc_info = urllib.parse.urlparse(location)
+        # Globus Transfer
+        if loc_info.scheme == "globus":
+            if filename:
+                transfer_path = os.path.join(local_path, filename)
+            else:
+                transfer_path = local_path
+            # Check that data not already in place
+            if (loc_info.netloc != local_ep
+                    and loc_info.path != transfer_path):
+                # Transfer locally
+                transfer = mdf_toolbox.custom_transfer(
+                                transfer_client, loc_info.netloc, local_ep,
+                                [(loc_info.path, transfer_path)],
+                                interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                                inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
+                for event in transfer:
+                    if not event["success"]:
+                        logger.info("Transfer is_error: {} - {}"
+                                    .format(event.get("code", "No code found"),
+                                            event.get("description", "No description found")))
+                if not event["success"]:
+                    logger.error("Transfer failed: {}".format(event))
+                    raise ValueError(event)
+        # HTTP(S)
+        elif loc_info.scheme.startswith("http"):
+            # Get default filename and extension
+            http_filename = os.path.basename(loc_info.path)
+            if not http_filename:
+                http_filename = "archive"
+            ext = os.path.splitext(http_filename)[1]
+            if not ext:
+                ext = ".archive"
+
+            # Fetch file
+            res = requests.get(location)
+            # Get filename from header if present
+            con_disp = res.headers.get("Content-Disposition", "")
+            filename_start = con_disp.find("filename=")
+            if filename_start >= 0:
+                filename_end = con_disp.find(";", filename_start)
+                if filename_end < 0:
+                    filename_end = None
+                http_filename = con_disp[filename_start+len("filename="):filename_end]
+                http_filename = http_filename.strip("\"'; ")
+
+            # Create path for file
+            archive_path = os.path.join(local_path, filename or http_filename)
+            # Make filename unique if filename is duplicate
+            collisions = 0
+            while os.path.exists(archive_path):
+                # Save and remove extension
+                archive_path, ext = os.path.splitext(archive_path)
+                old_add = "({})".format(collisions)
+                collisions += 1
+                new_add = "({})".format(collisions)
+                # If added number already, remove before adding new number
+                if archive_path.endswith(old_add):
+                    archive_path = archive_path[:-len(old_add)]
+                # Add "($num_collisions)" to end of filename to make filename unique
+                archive_path = archive_path + new_add + ext
+
+            # Download and save file
+            with open(archive_path, 'wb') as out:
+                out.write(res.content)
+            logger.debug("Downloaded HTTP file: {}".format(archive_path))
+        # Not supported
+        else:
+            # Nothing to do
+            raise IOError("Invalid data location: '{}' is not a recognized protocol "
+                          "(from {}).".format(loc_info.scheme, str(location)))
+
+    # Extract all archives, delete extracted archives
+    extract_res = mdf_toolbox.uncompress_tree(local_path, delete_archives=True)
+    if not extract_res["success"]:
+        raise IOError("Unable to extract archives in dataset")
+
+    return {
+        "success": True,
+        "num_extracted": extract_res["num_extracted"],
+        "total_files": sum([len(files) for _, _, files in os.walk(local_path)])
+    }
+
+
+def normalize_globus_uri(location):
+    """Normalize a Globus Web App link or Google Drive URI into a globus:// URI.
+    For Google Drive URIs, the file(s) must be shared with
+    materialsdatafacility@gmail.com.
+    If the URI is not a Globus Web App link or Google Drive URI,
+    it is returned unchanged.
+    Arguments:
+        location (str): One URI to normalize.
+    Returns:
+        str: The normalized URI, or the original URI if no normalization was possible.
+    """
+    loc_info = urllib.parse.urlparse(location)
+    # Globus Web App link into globus:// form
+    if (location.startswith("https://www.globus.org/app/transfer")
+            or location.startswith("https://app.globus.org/file-manager")):
+        data_info = urllib.parse.unquote(loc_info.query)
+        # EP ID is in origin or dest
+        ep_start = data_info.find("origin_id=")
+        if ep_start < 0:
+            ep_start = data_info.find("destination_id=")
+            if ep_start < 0:
+                raise ValueError("Invalid Globus Transfer UI link")
+            else:
+                ep_start += len("destination_id=")
+        else:
+            ep_start += len("origin_id=")
+        ep_end = data_info.find("&", ep_start)
+        if ep_end < 0:
+            ep_end = len(data_info)
+        ep_id = data_info[ep_start:ep_end]
+
+        # Same for path
+        path_start = data_info.find("origin_path=")
+        if path_start < 0:
+            path_start = data_info.find("destination_path=")
+            if path_start < 0:
+                raise ValueError("Invalid Globus Transfer UI link")
+            else:
+                path_start += len("destination_path=")
+        else:
+            path_start += len("origin_path=")
+        path_end = data_info.find("&", path_start)
+        if path_end < 0:
+            path_end = len(data_info)
+        path = data_info[path_start:path_end]
+
+        # Make new location
+        new_location = "globus://{}{}".format(ep_id, path)
+
+    # Google Drive protocol into globus:// form
+    elif loc_info.scheme in ["gdrive", "google", "googledrive"]:
+        # Correct form is "google:///path/file.dat"
+        # (three slashes - two for scheme end, one for path start)
+        # But if a user uses two slashes, the netloc will incorrectly be the top dir
+        # (netloc="path", path="/file.dat")
+        # Otherwise netloc is nothing (which is correct)
+        if loc_info.netloc:
+            gpath = "/" + loc_info.netloc + loc_info.path
+        else:
+            gpath = loc_info.path
+        # Don't use os.path.join because gpath starts with /
+        # GDRIVE_ROOT does not end in / to make compatible
+        new_location = "globus://{}{}{}".format(CONFIG["GDRIVE_EP"], CONFIG["GDRIVE_ROOT"], gpath)
+
+    # Default - do nothing
+    else:
+        new_location = location
+
+    return new_location
+
+
+def full_deriva_ingest(servername, data_json_file, acls=None):
+    """Perform a full ingest to DERIVA into a new catalog, using the CfdeDataPackage.
+
+    Arguments:
+        servername (str): The name of the DERIVA server.
+        data_json_file (str): The path to the JSON file with TableSchema data.
+
+    Returns:
+        #TODO
+    """
+    datapack = CfdeDataPackage(data_json_file, verbose=False)
+    # Format credentials in DerivaServer-expected format
+    creds = {
+        "bearer-token": get_deriva_token()
+    }
+    server = DerivaServer("https", servername, creds)
+    catalog = server.create_ermrest_catalog()
+    datapack.set_catalog(catalog)
+    datapack.provision()
+    datapack.apply_acls(acls)
+    datapack.load_data_files()
+
+    return {
+        "success": True,
+        "catalog_id": catalog.catalog_id
+    }
+
+
+'''
+# Old Deriva input functions
+def create_deriva_catalog(servername, ermrest_schema, acls):
+    """Create catalog on server with given schema and set ACLs.
+
+    Arguments:
+        servername (str): The server hostname. Only HTTPS servers are supported.
+        ermrest_schema (dict): The ERMrest schema the catalog shoudl have.
+        acls (dict of lists of str): The ACLs to set on the catalog.
+
+    Returns:
+        int: The catalog ID.
+    """
+    # Format credentials in DerivaServer-expected format
+    creds = {
+        "bearer-token": get_deriva_token()
+    }
+    server = DerivaServer("https", servername, creds)
+    catalog = server.create_ermrest_catalog()
+    catalog.post("/schema", json=ermrest_schema).raise_for_status()
+    model = catalog.getCatalogModel()
+    model.acls.update(acls)
+
+    # TODO: Other config? (Chaise display params, etc.)
+
+    model.apply(catalog)
+
+    return catalog.catalog_id
+
+
+def insert_deriva_data(servername, catalog, schema_name, table_name, data):
+    """Insert data into DERIVA.
+
+    Arguments:
+        servername (str): The name of the DERIVA server.
+        catalog (str): The catalog ID.
+        schema_name (str): The name of the schema being inserted.
+        table_name (str): The name of the table being inserted into.
+        data (list): The data to insert.
+
+    Returns:
+        #TODO
+    """
+    if type(schema_name) is not str:
+        raise TypeError("schema_name must be a string")
+    elif type(table_name) is not str:
+        raise TypeError("table_name must be a string")
+
+    # Format credentials in DerivaServer-expected format
+    creds = {
+        "bearer-token": get_deriva_token()
+    }
+    catalog = ErmrestCatalog("https", servername, catalog, credentials=creds)
+    pb = catalog.getPathBuilder()  # noqa: F841 (pb unused - it's used, but in an eval())
+    # Using eval() because DataPaths are dot-notated in DERIVA
+    # Sanitize schema_name and table_name first.
+    # It is not expected that malicious payloads will be loaded here,
+    # but it's better to have some low level of protection at least.
+    remove_list = [" ", "\n", "\t", ".", "(", ")"]
+    for char in remove_list:
+        schema_name = schema_name.replace(char, "")
+        table_name = table_name.replace(char, "")
+    table = eval(f"pb.{schema_name}.{table_name}")
+
+    try:
+        res = table.insert(data)
+    except Exception:
+        # TODO: Error handling
+        raise
+
+    return {
+        "success": True,
+        "num_inserted": len(res),
+        "uri": res.uri
+    }
+
+
+def convert_tabular(path):
+    """Read a tabular data file and return OrderedDict results.
+
+    Arguments:
+        path (str): The path to the data file.
+
+    Returns:
+        list of OrderedDict: The data.
+    """
+    dialect = "excel-tab" if path.endswith(".tsv") else "excel"
+    with open(path, newline='') as f:
+        return [row for row in csv.DictReader(f, dialect=dialect)]
+'''
+'''
+# Old convert_tableschema
+def convert_tableschema(tableschema, schema_name):
+    """Convert a TableSchema into ERMRest for a DERIVA catalog."""
+    resources = tableschema["resources"]
+    return {
+        "schemas": {
+            schema_name: {
+                "schema_name": schema_name,
+                "tables": {
+                    tdef["name"]: make_table(tdef, schema_name)
+                    for tdef in resources
+                }
+            }
+        }
+    }
+
+
+def make_table(tdef, schema_name, provide_system=True):
+    tname = tdef["name"]
+    tdef = tdef["schema"]
+    keys = []
+    keysets = set()
+    pk = tdef.get("primaryKey")
+    if isinstance(pk, str):
+        pk = [pk]
+    if isinstance(pk, list):
+        keys.append(make_key(tname, pk, schema_name))
+        keysets.add(frozenset(pk))
+    return Table.define(
+        tname,
+        column_defs=[
+            make_column(cdef)
+            for cdef in tdef.get("fields", [])
+        ],
+        key_defs=([make_key(tname, pk, schema_name)] if pk else []) + [
+            make_key(tname, [cdef["name"]], schema_name)
+            for cdef in tdef.get("fields", [])
+            if cdef.get("constraints", {}).get("unique", False)
+            and frozenset([cdef["name"]]) not in keysets
+        ],
+        fkey_defs=[
+            make_fkey(tname, fkdef, schema_name)
+            for fkdef in tdef.get("foreignKeys", [])
+        ],
+        comment=tdef.get("description"),
+        provide_system=provide_system
+    )
+
+
+def make_type(col_type):
+    """Choose appropriate ERMrest column types..."""
+    if col_type == "string":
+        return builtin_types.text
+    elif col_type == "datetime":
+        return builtin_types.timestamptz
+    elif col_type == "date":
+        return builtin_types.date
+    elif col_type == "integer":
+        return builtin_types.int8
+    elif col_type == "number":
+        return builtin_types.float8
+    elif col_type == "list":
+        # assume a list is a list of strings for now...
+        return builtin_types["text[]"]
+    else:
+        raise ValueError("Mapping undefined for type '{}'".format(col_type))
+
+
+def make_column(cdef):
+    constraints = cdef.get("constraints", {})
+    return Column.define(
+        cdef["name"],
+        make_type(cdef.get("type", "string")),
+        nullok=(not constraints.get("required", False)),
+        comment=cdef.get("description"),
+    )
+
+
+def make_key(tname, cols, schema_name):
+    return Key.define(
+        cols,
+        constraint_names=[[schema_name, "{}_{}_key".format(tname, "_".join(cols))]],
+    )
+
+
+def make_fkey(tname, fkdef, schema_name):
+    fkcols = fkdef["fields"]
+    fkcols = [fkcols] if isinstance(fkcols, str) else fkcols
+    reference = fkdef["reference"]
+    pktable = reference["resource"]
+    pktable = tname if pktable == "" else pktable
+    pkcols = reference["fields"]
+    pkcols = [pkcols] if isinstance(pkcols, str) else pkcols
+    return ForeignKey.define(
+        fkcols,
+        schema_name,
+        pktable,
+        pkcols,
+        constraint_names=[[schema_name, "{}_{}_fkey".format(tname, "_".join(fkcols))]],
+    )
+'''
