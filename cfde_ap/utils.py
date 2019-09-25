@@ -1,5 +1,5 @@
 from copy import deepcopy
-import csv
+# import csv
 import logging
 import os
 import shutil
@@ -8,14 +8,15 @@ import urllib
 import boto3
 from boto3.dynamodb.conditions import Attr
 import bson  # For IDs
-from deriva.core import DerivaServer, ErmrestCatalog
-from deriva.core.ermrest_model import builtin_types, Table, Column, Key, ForeignKey
+from deriva.core import DerivaServer  # , ErmrestCatalog
+# from deriva.core.ermrest_model import builtin_types, Table, Column, Key, ForeignKey
 import globus_sdk
 import mdf_toolbox
 import requests
 
 from cfde_ap import CONFIG
 from . import error as err
+from .cfde_datapackage import CfdeDataPackage
 
 
 logger = logging.getLogger(__name__)
@@ -553,6 +554,36 @@ def normalize_globus_uri(location):
     return new_location
 
 
+def full_deriva_ingest(servername, data_json_file, acls=None):
+    """Perform a full ingest to DERIVA into a new catalog, using the CfdeDataPackage.
+
+    Arguments:
+        servername (str): The name of the DERIVA server.
+        data_json_file (str): The path to the JSON file with TableSchema data.
+
+    Returns:
+        #TODO
+    """
+    datapack = CfdeDataPackage(data_json_file, verbose=False)
+    # Format credentials in DerivaServer-expected format
+    creds = {
+        "bearer-token": get_deriva_token()
+    }
+    server = DerivaServer("https", servername, creds)
+    catalog = server.create_ermrest_catalog()
+    datapack.set_catalog(catalog)
+    datapack.provision()
+    datapack.apply_acls(acls)
+    datapack.load_data_files()
+
+    return {
+        "success": True,
+        "catalog_id": catalog.catalog_id
+    }
+
+
+'''
+# Old Deriva input functions
 def create_deriva_catalog(servername, ermrest_schema, acls):
     """Create catalog on server with given schema and set ACLs.
 
@@ -640,8 +671,9 @@ def convert_tabular(path):
     dialect = "excel-tab" if path.endswith(".tsv") else "excel"
     with open(path, newline='') as f:
         return [row for row in csv.DictReader(f, dialect=dialect)]
-
-
+'''
+'''
+# Old convert_tableschema
 def convert_tableschema(tableschema, schema_name):
     """Convert a TableSchema into ERMRest for a DERIVA catalog."""
     resources = tableschema["resources"]
@@ -741,3 +773,4 @@ def make_fkey(tname, fkdef, schema_name):
         pkcols,
         constraint_names=[[schema_name, "{}_{}_fkey".format(tname, "_".join(fkcols))]],
     )
+'''

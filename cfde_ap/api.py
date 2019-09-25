@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-import json
+# import json
 import logging
 import multiprocessing
 import os
@@ -390,9 +390,6 @@ def restore_deriva(action_id, url, catalog=None):
 
 def create_deriva(action_id, url, acls=None):
     # Download ingest BDBag
-    # TODO: Use original file name (Content-Disposition)
-    #       Make filename unique if collision
-
     # Excessive try-except blocks because there's (currently) no process management;
     # if the action fails, it needs to always self-report failure
 
@@ -439,6 +436,86 @@ def create_deriva(action_id, url, acls=None):
                           f"After error '{repr(e)}'")
         return
 
+    # Find datapackage JSON file
+    schema_file = "File not found"
+    try:
+        # Get BDBag extract dir (assume exactly one dir)
+        bdbag_dir = [dirname for dirname in os.listdir(data_dir)
+                     if os.isdir(os.path.join(data_dir, dirname))][0]
+        bdbag_data = os.path.join(bdbag_dir, "data")
+        # Get schema file (assume exactly one JSON file)
+        schema_file = [filename for filename in os.listdir(bdbag_data)
+                       if filename.endswith(".json")][0]
+        schema_file_path = os.path.join(bdbag_data, schema_file)
+    except Exception as e:
+        error_status = {
+            "status": "FAILED",
+            "details": {
+                "error": f"Could not read TableSchema file '{schema_file}'"
+            }
+        }
+        try:
+            utils.update_action_status(TBL, action_id, error_status)
+        except Exception as e2:
+            with open("ERROR.log", 'w') as out:
+                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
+                          f"After error '{repr(e)}'")
+        return
+
+    # Ingest into Deriva
+    try:
+        servername = CONFIG["DERIVA_SERVER_NAME"]
+        # TODO: Determine schema name from data
+        schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
+
+        ingest_res = utils.full_deriva_ingest(servername, schema_file_path, acls)
+        if not ingest_res["success"]:
+            error_status = {
+                "status": "FAILED",
+                "details": {
+                    "error": f"Unable to create new DERIVA catalog: {ingest_res.get('error')}"
+                }
+            }
+            utils.update_action_status(TBL, action_id, error_status)
+            return
+        catalog_id = ingest_res["catalog_id"]
+    except Exception as e:
+        error_status = {
+            "status": "FAILED",
+            "details": {
+                "error": f"Unable to create new DERIVA catalog: {str(e)}"
+            }
+        }
+        try:
+            utils.update_action_status(TBL, action_id, error_status)
+        except Exception as e2:
+            with open("ERROR.log", 'w') as out:
+                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
+                          f"After error '{repr(e)}'")
+        return
+
+    # Successful ingest
+    logger.debug(f"{action_id}: Catalog {catalog_id} populated")
+    status = {
+        "status": "SUCCEEDED",
+        "details": {
+            "deriva_id": catalog_id,
+            # "number_ingested": insert_count,
+            "deriva_link": (f"https://{servername}/chaise/recordset/"
+                            f"#{catalog_id}/{schema_name}:Dataset"),
+            "message": "DERIVA ingest successful"
+        }
+    }
+    try:
+        utils.update_action_status(TBL, action_id, status)
+    except Exception as e:
+        with open("ERROR.log", 'w') as out:
+            out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
+                      f"After success on ID '{catalog_id}'")
+    return
+
+    '''
+    # Old version of Deriva ingest
     # Read and convert TableSchema to ERMrest schema
     # TODO: Will there be exactly on JSON file always? Currently assumed true.
     logger.debug(f"{action_id}: Converting TableSchema to ERMrest")
@@ -563,3 +640,4 @@ def create_deriva(action_id, url, acls=None):
             out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
                       f"After success on ID '{catalog_id}'")
     return
+    '''

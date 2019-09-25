@@ -5,11 +5,11 @@ returns ERM schema as dictionary
 
 """
 
-import json
 from deriva.core.ermrest_model import builtin_types, Table, Column, Key, ForeignKey
 
 schema_tag = 'tag:isrd.isi.edu,2019:table-schema-leftovers'
 resource_tag = 'tag:isrd.isi.edu,2019:table-resource'
+
 
 def make_type(type, format):
     """Choose appropriate ERMrest column types..."""
@@ -27,6 +27,7 @@ def make_type(type, format):
         # assume a list is a list of strings for now...
         return builtin_types["text[]"]
     raise ValueError('no mapping defined yet for type=%s format=%s' % (type, format))
+
 
 def make_column(cdef):
     cdef = dict(cdef)
@@ -47,11 +48,13 @@ def make_column(cdef):
         }
     )
 
+
 def make_key(tname, cols, schema_name):
     return Key.define(
         cols,
-        constraint_names=[ [schema_name, "%s_%s_key" % (tname, "_".join(cols))] ],
+        constraint_names=[[schema_name, "%s_%s_key" % (tname, "_".join(cols))]],
     )
+
 
 def make_fkey(tname, fkdef, schema_name):
     fkcols = fkdef.pop("fields")
@@ -66,13 +69,14 @@ def make_fkey(tname, fkdef, schema_name):
         schema_name,
         pktable,
         pkcols,
-        constraint_names=[ [schema_name, "%s_%s_fkey" % (tname, "_".join(fkcols))] ],
+        constraint_names=[[schema_name, "%s_%s_fkey" % (tname, "_".join(fkcols))]],
         annotations={
             schema_tag: fkdef,
         }
     )
 
-def make_table(tdef, schema_name, skip_system_cols = False):
+
+def make_table(tdef, schema_name, skip_system_cols=False):
     tname = tdef["name"]
     tcomment = tdef.get("description")
     tdef_resource = tdef
@@ -112,7 +116,8 @@ def make_table(tdef, schema_name, skip_system_cols = False):
         }
     )
 
-def convert_tableschema(tableschema, schema_name = 'CFDE', skip_system_cols = False):
+
+def convert_tableschema(tableschema, schema_name='CFDE', skip_system_cols=False):
     resources = tableschema['resources']
     deriva_schema = {
         "schemas": {
@@ -126,4 +131,3 @@ def convert_tableschema(tableschema, schema_name = 'CFDE', skip_system_cols = Fa
         }
     }
     return deriva_schema
-

@@ -2,10 +2,11 @@ import os
 import json
 import csv
 
-from deriva.core import urlquote, AttrDict
+from deriva.core import urlquote
 from deriva.core.ermrest_config import tag
 
-import tableschema2erm
+from . import tableschema2erm
+
 
 # we'll use this utility function later...
 def topo_sorted(depmap):
@@ -19,8 +20,8 @@ def topo_sorted(depmap):
     multiple iterations.
 
     """
-    ordered = [ item for item, requires in depmap.items() if not requires ]
-    depmap = { item: set(requires) for item, requires in depmap.items() if requires }
+    ordered = [item for item, requires in depmap.items() if not requires]
+    depmap = {item: set(requires) for item, requires in depmap.items() if requires}
     satisfied = set(ordered)
     while depmap:
         additions = []
@@ -35,49 +36,30 @@ def topo_sorted(depmap):
         additions = []
     return ordered
 
-class CfdeDataPackage (object):
+
+class CfdeDataPackage(object):
     # the translation stores frictionless table resource metadata under this annotation
     resource_tag = 'tag:isrd.isi.edu,2019:table-resource'
     # the translation leaves extranneous table-schema stuff under this annotation
     # (i.e. stuff that perhaps wasn't translated to deriva equivalents)
     schema_tag = 'tag:isrd.isi.edu,2019:table-schema-leftovers'
 
-    # some useful group IDs to use later in ACLs...
-    grp = AttrDict({
-        # USC/ISI ISRD roles
-        "isrd_staff": "https://auth.globus.org/176baec4-ed26-11e5-8e88-22000ab4b42b",
-        'isrd_testers':    "https://auth.globus.org/9d596ac6-22b9-11e6-b519-22000aef184d",
-        # demo.derivacloud.org roles
-        "demo_admin": "https://auth.globus.org/5a773142-e2ed-11e8-a017-0e8017bdda58",
-        "demo_creator": "https://auth.globus.org/bc286232-a82c-11e9-8157-0ed6cb1f08e0",
-        "demo_writer": "https://auth.globus.org/caa11064-e2ed-11e8-9d6d-0a7c1eab007a",
-        "demo_curator": "https://auth.globus.org/a5cfa412-e2ed-11e8-a768-0e368f3075e8",
-        "demo_reader": "https://auth.globus.org/b9100ea4-e2ed-11e8-8b39-0e368f3075e8",
-    })
-    writers = [grp.demo_curator, grp.demo_writer]
-    catalog_acls = {
-        "owner": [grp.demo_admin, grp.demo_creator],
-        "insert": writers,
-        "update": writers,
-        "delete": writers,
-        "select": [grp.demo_reader, grp.isrd_testers, grp.isrd_staff],
-        "enumerate": ["*"],
-    }
-
-    def __init__(self, filename):
+    def __init__(self, filename, verbose=True):
         self.filename = filename
         self.dirname = os.path.dirname(self.filename)
         self.catalog = None
         self.model_root = None
         self.cfde_schema = None
-        
+        self.verbose = verbose
+
         with open(self.filename, 'r') as f:
             tableschema = json.loads(f.read())
 
         self.model_doc = tableschema2erm.convert_tableschema(tableschema, 'CFDE', True)
 
         if set(self.model_doc['schemas']) != {'CFDE'}:
-            raise NotImplementedError('Unexpected schema set in data package: %s' % (self.model_doc['schemas'],))
+            raise NotImplementedError('Unexpected schema set in data package: '
+                                      '%s' % (self.model_doc['schemas'],))
 
     def set_catalog(self, catalog):
         self.catalog = catalog
@@ -113,7 +95,8 @@ class CfdeDataPackage (object):
                     need_tables.append(tdoc)
 
             if need_tables:
-                print("Added tables %s" % ([tdoc['table_name'] for tdoc in need_tables]))
+                if self.verbose:
+                    print("Added tables %s" % ([tdoc['table_name'] for tdoc in need_tables]))
                 self.catalog.post('/schema', json=need_tables).raise_for_status()
 
             for cdoc in need_columns:
@@ -121,13 +104,14 @@ class CfdeDataPackage (object):
                     '/schema/CFDE/table/%s/column' % urlquote(cdoc['table_name']),
                     json=cdoc
                 ).raise_for_status()
-                print("Added column %s.%s" % (cdoc['table_name'], cdoc['name']))
+                if self.verbose:
+                    print("Added column %s.%s" % (cdoc['table_name'], cdoc['name']))
 
         self.get_model()
 
-    def apply_acls(self):
+    def apply_acls(self, acls):
         self.get_model()
-        self.model_root.acls.update(self.catalog_acls)
+        self.model_root.acls.update(acls)
 
         # set custom chaise configuration values for this catalog
         self.model_root.annotations[tag.chaise_config] = {
@@ -135,7 +119,7 @@ class CfdeDataPackage (object):
             "SystemColumnsDisplayCompact": [],
         }
 
-        ## apply the above ACL and annotation changes to server
+        # apply the above ACL and annotation changes to server
         self.model_root.apply(self.catalog)
         self.get_model()
 
@@ -153,7 +137,7 @@ class CfdeDataPackage (object):
             """Convert row tuple to dictionary of {col: val} mappings."""
             return dict(zip(
                 header,
-                [ None if x in missingValues else x for x in row ]
+                [None if x in missingValues else x for x in row]
             ))
 
         return row2dict
@@ -185,7 +169,7 @@ class CfdeDataPackage (object):
                     reader = csv.reader(f, delimiter="\t")
                     raw_rows = list(reader)
                     row2dict = self.make_row2dict(table, raw_rows[0])
-                    dict_rows = [ row2dict(row) for row in raw_rows[1:] ]
+                    dict_rows = [row2dict(row) for row in raw_rows[1:]]
                     self.catalog.post("/entity/CFDE:%s" % urlquote(table.name), json=dict_rows)
-                    print("Table %s data loaded from %s." % (table.name, fname))
-
+                    if self.verbose:
+                        print("Table %s data loaded from %s." % (table.name, fname))

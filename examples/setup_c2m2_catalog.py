@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 
-import os
 import sys
 
-from deriva.core import DerivaServer, get_credential, urlquote, AttrDict
-from deriva.core.ermrest_config import tag
+from deriva.core import DerivaServer, get_credential
 
 from cfde_datapackage import CfdeDataPackage
 
@@ -34,7 +32,7 @@ resource after the schema is provisioned.
 # this is the deriva server where we will create a catalog
 servername = 'demo.derivacloud.org'
 
-## bind to server
+# bind to server
 credentials = get_credential(servername)
 server = DerivaServer('https', servername, credentials)
 
@@ -47,12 +45,12 @@ if len(sys.argv) != 2:
 dp = CfdeDataPackage(sys.argv[1])
 
 
-## create catalog
+# create catalog
 catalog = server.create_ermrest_catalog()
 print('New catalog has catalog_id=%s' % catalog.catalog_id)
 print("Don't forget to delete it if you are done with it!")
 
-## deploy model(s)
+# deploy model(s)
 dp.set_catalog(catalog)
 dp.provision()
 print("Model deployed for %s." % (dp.filename,))
@@ -60,7 +58,7 @@ print("Model deployed for %s." % (dp.filename,))
 # set acls
 dp.apply_acls()
 
-## load some sample data?
+# load some sample data?
 dp.load_data_files()
 
 print("All data packages loaded.")
