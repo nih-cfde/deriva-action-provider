@@ -398,7 +398,7 @@ def create_deriva(action_id, url, acls=None):
     try:
         if acls is None:
             acls = CONFIG["DEFAULT_ACLS"]
-        data_dir = os.path.join(CONFIG["DATA_DIR"], action_id)
+        data_dir = os.path.join(CONFIG["DATA_DIR"], action_id + "/")
     except Exception as e:
         error_status = {
             "status": "FAILED",
@@ -438,11 +438,13 @@ def create_deriva(action_id, url, acls=None):
 
     # Find datapackage JSON file
     schema_file = "File not found"
+    logger.debug(f"{action_id}: Determining schema file path")
     try:
         # Get BDBag extract dir (assume exactly one dir)
         bdbag_dir = [dirname for dirname in os.listdir(data_dir)
-                     if os.isdir(os.path.join(data_dir, dirname))][0]
-        bdbag_data = os.path.join(bdbag_dir, "data")
+                     if os.path.isdir(os.path.join(data_dir, dirname))][0]
+        # Dir is repeated because of BDBag structure
+        bdbag_data = os.path.join(data_dir, bdbag_dir, bdbag_dir, "data")
         # Get schema file (assume exactly one JSON file)
         schema_file = [filename for filename in os.listdir(bdbag_data)
                        if filename.endswith(".json")][0]
@@ -451,7 +453,7 @@ def create_deriva(action_id, url, acls=None):
         error_status = {
             "status": "FAILED",
             "details": {
-                "error": f"Could not read TableSchema file '{schema_file}'"
+                "error": f"Could not process TableSchema file '{schema_file}': {str(e)}"
             }
         }
         try:
@@ -463,6 +465,7 @@ def create_deriva(action_id, url, acls=None):
         return
 
     # Ingest into Deriva
+    logger.debug(f"{action_id}: Ingesting into Deriva")
     try:
         servername = CONFIG["DERIVA_SERVER_NAME"]
         # TODO: Determine schema name from data
@@ -523,7 +526,7 @@ def create_deriva(action_id, url, acls=None):
     try:
         # Get BDBag extract dir (assume exactly one dir)
         bdbag_dir = [dirname for dirname in os.listdir(data_dir)
-                     if os.isdir(os.path.join(data_dir, dirname))][0]
+                     if os.path.isdir(os.path.join(data_dir, dirname))][0]
         bdbag_data = os.path.join(bdbag_dir, "data")
         # Get schema file (assume exactly one JSON file
         schema_file = [filename for filename in os.listdir(bdbag_data)

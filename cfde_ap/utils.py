@@ -387,7 +387,8 @@ def download_data(transfer_client, source_loc, local_ep, local_path):
     """
     filename = None
     # If the local_path is a file and not a directory, use the directory
-    if local_path[-1] != "/":
+    if ((os.path.exists(local_path) and not os.path.isdir(local_path))
+            or (not os.path.exists(local_path) and local_path[-1] != "/")):
         # Save the filename for later
         filename = os.path.basename(local_path)
         local_path = os.path.dirname(local_path) + "/"
