@@ -118,6 +118,12 @@ def meta():
     return jsonify(resp)
 
 
+@app.route("/ping", methods=["GET"])
+def health_ping():
+    # Show service is alive
+    return jsonify({"success": True})
+
+
 @app.route(ROOT+"run", methods=["POST"])
 def run():
     req = request.get_json(force=True)

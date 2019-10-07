@@ -16,7 +16,8 @@ import requests
 
 from cfde_ap import CONFIG
 from . import error as err
-from .cfde_datapackage import CfdeDataPackage
+#from .cfde_datapackage import CfdeDataPackage
+from cfde_deriva.datapackage import CfdeDataPackage
 
 
 logger = logging.getLogger(__name__)
@@ -577,7 +578,8 @@ def full_deriva_ingest(servername, data_json_file, acls=None):
     Returns:
         #TODO
     """
-    datapack = CfdeDataPackage(data_json_file, verbose=False)
+    # datapack = CfdeDataPackage(data_json_file, verbose=False)
+    datapack = CfdeDataPackage(data_json_file)
     # Format credentials in DerivaServer-expected format
     creds = {
         "bearer-token": get_deriva_token()
@@ -586,7 +588,7 @@ def full_deriva_ingest(servername, data_json_file, acls=None):
     catalog = server.create_ermrest_catalog()
     datapack.set_catalog(catalog)
     datapack.provision()
-    datapack.apply_acls(acls)
+    # datapack.apply_acls(acls)
     datapack.load_data_files()
 
     return {
