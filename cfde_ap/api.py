@@ -63,6 +63,9 @@ def handle_invalid_usage(error):
 
 @app.before_request
 def before_request():
+    # Service alive check can skip validation
+    if request.path == "/ping":
+        return {"success": True}
     wrapped_req = FlaskOpenAPIRequest(request)
     validation_result = request_validator.validate(wrapped_req)
     if validation_result.errors:
@@ -116,12 +119,6 @@ def meta():
                                             allow_all_authenticated_users=True):
         raise err.NotAuthorized("You cannot view this Action Provider.")
     return jsonify(resp)
-
-
-@app.route("/ping", methods=["GET"])
-def health_ping():
-    # Show service is alive
-    return jsonify({"success": True})
 
 
 @app.route(ROOT+"run", methods=["POST"])
@@ -237,20 +234,23 @@ def release(action_id):
 
 def start_action(action_id, action_data):
     # Restore Action
-    if action_data.get("restore_url"):
-        logger.info(f"{action_id}: Starting Deriva restore")
+    if action_data.get("restore"):
+        logger.info(f"{action_id}: Starting Deriva restore into "
+                    f"{action_data.get('catalog_id', 'new catalog')}")
         # Spawn new process
         # TODO: Process management
         #       Currently assuming process manages itself
-        args = (action_id, action_data["restore_url"], action_data.get("restore_catalog"))
-        driver = multiprocessing.Process(target=restore_deriva, args=args, name=action_id)
+        args = (action_id, action_data["data_url"], action_data.get("catalog_id"))
+        driver = multiprocessing.Process(target=action_restore, args=args, name=action_id)
         driver.start()
     # Ingest Action
-    elif action_data.get("ingest_url"):
-        logger.info(f"{action_id}: Starting Deriva new creation")
+    else:
+        logger.info(f"{action_id}: Starting Deriva ingest into "
+                    f"{action_data.get('catalog_id', 'new catalog')}")
         # Spawn new process
-        args = (action_id, action_data["ingest_url"], action_data.get("ingest_catalog_acls"))
-        driver = multiprocessing.Process(target=create_deriva, args=args, name=action_id)
+        args = (action_id, action_data["data_url"], action_data.get("catalog_id"),
+                action_data.get("catalog_acls"))
+        driver = multiprocessing.Process(target=action_ingest, args=args, name=action_id)
         driver.start()
     return
 
@@ -266,7 +266,7 @@ def cancel_action(action_id):
 # Asynchronous actions
 #######################################
 
-def restore_deriva(action_id, url, catalog=None):
+def action_restore(action_id, url, catalog=None):
     token = utils.get_deriva_token()
 
     # Download backup zip file
@@ -394,12 +394,12 @@ def restore_deriva(action_id, url, catalog=None):
     return
 
 
-def create_deriva(action_id, url, acls=None):
+def action_ingest(action_id, url, catalog_id=None, acls=None):
     # Download ingest BDBag
     # Excessive try-except blocks because there's (currently) no process management;
     # if the action fails, it needs to always self-report failure
 
-    logger.debug(f"{action_id}: Deriva creation process started")
+    logger.debug(f"{action_id}: Deriva ingest process started for {catalog_id or 'new catalog'}")
     # Setup
     try:
         if acls is None:
@@ -420,6 +420,8 @@ def create_deriva(action_id, url, acls=None):
                 out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
                           f"After error '{repr(e)}'")
         return
+
+    # TODO: Check that catalog exists if catalog_id set
 
     # Download and unarchive link
     logger.debug(f"{action_id}: Downloading '{url}'")
@@ -477,12 +479,13 @@ def create_deriva(action_id, url, acls=None):
         # TODO: Determine schema name from data
         schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
 
-        ingest_res = utils.full_deriva_ingest(servername, schema_file_path, acls)
+        ingest_res = utils.deriva_ingest(servername, schema_file_path,
+                                         catalog_id=catalog_id, acls=acls)
         if not ingest_res["success"]:
             error_status = {
                 "status": "FAILED",
                 "details": {
-                    "error": f"Unable to create new DERIVA catalog: {ingest_res.get('error')}"
+                    "error": f"Unable to ingest to DERIVA: {ingest_res.get('error')}"
                 }
             }
             utils.update_action_status(TBL, action_id, error_status)
@@ -492,7 +495,7 @@ def create_deriva(action_id, url, acls=None):
         error_status = {
             "status": "FAILED",
             "details": {
-                "error": f"Unable to create new DERIVA catalog: {str(e)}"
+                "error": f"Error ingesting to DERIVA: {str(e)}"
             }
         }
         try:

@@ -16,7 +16,7 @@ import requests
 
 from cfde_ap import CONFIG
 from . import error as err
-#from .cfde_datapackage import CfdeDataPackage
+# from .cfde_datapackage import CfdeDataPackage
 from cfde_deriva.datapackage import CfdeDataPackage
 
 
@@ -568,26 +568,35 @@ def normalize_globus_uri(location):
     return new_location
 
 
-def full_deriva_ingest(servername, data_json_file, acls=None):
-    """Perform a full ingest to DERIVA into a new catalog, using the CfdeDataPackage.
+def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
+    """Perform an ingest to DERIVA into a catalog, using the CfdeDataPackage.
 
     Arguments:
         servername (str): The name of the DERIVA server.
         data_json_file (str): The path to the JSON file with TableSchema data.
+        catalog_id (str): If updating an existing catalog, the existing catalog ID.
+                Default None, to create a new catalog.
+        acls (dict): The ACLs to set on the catalog. Currently nonfunctional.
+                Default None.
 
     Returns:
-        #TODO
+        dict: The result of the ingest.
+            success (bool): True when the ingest was successful.
+            catalog_id (str): The catalog's ID.
     """
-    # datapack = CfdeDataPackage(data_json_file, verbose=False)
-    datapack = CfdeDataPackage(data_json_file)
+    datapack = CfdeDataPackage(data_json_file, verbose=False)
     # Format credentials in DerivaServer-expected format
     creds = {
         "bearer-token": get_deriva_token()
     }
     server = DerivaServer("https", servername, creds)
-    catalog = server.create_ermrest_catalog()
+    if catalog_id:
+        catalog = server.connect_ermrest(catalog_id)
+    else:
+        catalog = server.create_ermrest_catalog()
     datapack.set_catalog(catalog)
-    datapack.provision()
+    if not catalog_id:
+        datapack.provision()
     # datapack.apply_acls(acls)
     datapack.load_data_files()
 
