@@ -426,7 +426,7 @@ def action_ingest(action_id, url, catalog_id=None, acls=None):
     # Download and unarchive link
     logger.debug(f"{action_id}: Downloading '{url}'")
     try:
-        dl_res = utils.download_data(None, [url], CONFIG["LOCAL_EP"], data_dir)
+        dl_res = utils.download_data([url], data_dir)
         if not dl_res["success"]:
             raise ValueError(str(dl_res))
     except Exception as e:

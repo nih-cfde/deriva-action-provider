@@ -384,15 +384,12 @@ def _generate_new_deriva_token():
     return tokens["refresh_token"]
 
 
-def download_data(transfer_client, source_loc, local_ep, local_path):
+def download_data(source_loc, local_path):
     """Download data from a remote host to the configured machine.
     (Many sources to one destination)
 
     Arguments:
-        transfer_client (TransferClient): An authenticated TransferClient with access to the data.
-                                          Technically unnecessary for non-Globus data locations.
         source_loc (list of str): The location(s) of the data.
-        local_ep (str): The local machine's endpoint ID.
         local_path (str): The path to the local storage location.
 
     Returns:
@@ -411,34 +408,10 @@ def download_data(transfer_client, source_loc, local_ep, local_path):
         source_loc = [source_loc]
 
     # Download data locally
-    for raw_loc in source_loc:
-        location = normalize_globus_uri(raw_loc)
+    for location in source_loc:
         loc_info = urllib.parse.urlparse(location)
-        # Globus Transfer
-        if loc_info.scheme == "globus":
-            if filename:
-                transfer_path = os.path.join(local_path, filename)
-            else:
-                transfer_path = local_path
-            # Check that data not already in place
-            if (loc_info.netloc != local_ep
-                    and loc_info.path != transfer_path):
-                # Transfer locally
-                transfer = mdf_toolbox.custom_transfer(
-                                transfer_client, loc_info.netloc, local_ep,
-                                [(loc_info.path, transfer_path)],
-                                interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                                inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
-                for event in transfer:
-                    if not event["success"]:
-                        logger.info("Transfer is_error: {} - {}"
-                                    .format(event.get("code", "No code found"),
-                                            event.get("description", "No description found")))
-                if not event["success"]:
-                    logger.error("Transfer failed: {}".format(event))
-                    raise ValueError(event)
         # HTTP(S)
-        elif loc_info.scheme.startswith("http"):
+        if loc_info.scheme.startswith("http"):
             # Get default filename and extension
             http_filename = os.path.basename(loc_info.path)
             if not http_filename:
