@@ -233,6 +233,10 @@ def release(action_id):
 #######################################
 
 def start_action(action_id, action_data):
+    # Transform input from Automate, if Transferred before ingesting
+    if action_data.get("fair_re_path"):
+        action_data["data_url"] = CONFIG["FAIR_RE_URL"] + action_data.pop("fair_re_path")
+
     # Restore Action
     if action_data.get("restore"):
         logger.info(f"{action_id}: Starting Deriva restore into "

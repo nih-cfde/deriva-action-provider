@@ -11,6 +11,11 @@ INPUT_SCHEMA = {
             "format": "uri",
             "description": "The URL to the data for DERIVA ingest."
         },
+        "fair_re_path": {
+            "type": "string",
+            "description": ("Path on the FAIR Research Examples endpoint, to support "
+                            "Globus Transfer (with Automate) input.")
+        },
         "restore": {
             "type": "boolean",
             "description": ("Whether or not this is a restoration of a backed-up catalog (true), "
@@ -80,8 +85,9 @@ INPUT_SCHEMA = {
             }
         }
     },
-    "required": [
-        "data_url"
+    "oneOf": [
+        {"required": ["data_url"]},
+        {"required": ["fair_re_path"]}
     ]
 }
 

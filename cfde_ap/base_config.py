@@ -13,6 +13,7 @@ BASE_CONFIG = {
     "DATA_DIR": os.path.join(os.path.expanduser("~"), "deriva_data"),
     "DERIVA_SERVER_NAME": "demo.derivacloud.org",
     "DERIVA_SCHEMA_NAME": "CFDE",
+    "FAIR_RE_URL": "https://317ec.36fe.dn.glob.us",
     "TRANSFER_PING_INTERVAL": 60,  # Seconds
     "TRANSFER_DEADLINE": 24 * 60 * 60,  # 1 day, in seconds
     "LOCAL_EP": "globus_transfer_not_supported",
