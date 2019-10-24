@@ -1,25 +1,59 @@
 import os
 
 from bdbag import bdbag_api
-# from fair_research_login import NativeClient, LoadError, ScopesMismatch
+from fair_research_login import NativeClient
 import globus_automate_client
 import globus_sdk
 import requests
 
 
-# class CfdeClient(NativeClient):
+STATE_MSGS = {
+    "ACTIVE": "is still in progress",
+    "INACTIVE": "has stalled, and may need help to resume",
+    "SUCCEEDED": "has completed successfully",
+    "FAILED": "has failed"
+}
+
+
 class CfdeClient():
     """The CfdeClient enables easily using the CFDE tools to ingest data."""
     client_id = "417301b1-5101-456a-8a27-423e71a2ae26"
-    required_scopes = []
+    app_name = "CfdeClient"
+    scopes = (list(globus_automate_client.flows_client.ALL_FLOW_SCOPES)
+              + ["https://auth.globus.org/scopes/0e57d793-f1ac-4eeb-a30f-643b082d68ec/all"])
     transfer_flow_id = "b1e13f5e-dad6-4524-8c3f-fb39e752a266"
     http_flow_id = "f172de09-b75b-4b83-9b97-90877b42c774"
     archive_format = "tgz"
     fair_re_dir = "/public/CFDE/metadata/"
     fair_re_url = "https://317ec.36fe.dn.glob.us"
 
-    def __init__(self):
-        self.flow_client = globus_automate_client.create_flows_client(self.client_id)
+    def __init__(self, **kwargs):
+        """Create a CfdeClient.
+
+        Keyword Arguments:
+            no_browser (bool): Do not automatically open the browser for the Globus Auth URL.
+                    Display the URL instead and let the user navigate to that location manually.
+                    **Default**: ``False``.
+            refresh_tokens (bool): Use Globus Refresh Tokens to extend login time.
+                    **Default**: ``True``.
+            force (bool): Force a login flow, even if loaded tokens are valid.
+                    Same effect as ``clear_old_tokens``. If one of these is ``True``, the effect
+                    triggers. **Default**: ``False``.
+        """
+        self.__native_client = NativeClient(client_id=self.client_id, app_name=self.app_name)
+        self.__native_client.login(requested_scopes=self.scopes,
+                                   no_browser=kwargs.get("no_browser", False),
+                                   refresh_tokens=kwargs.get("refresh_tokens", True),
+                                   force=kwargs.get("force", False))
+        tokens = self.__native_client.load_tokens_by_scope()
+        automate_authorizer = self.__native_client.get_authorizer(
+                                    tokens[globus_automate_client.flows_client.MANAGE_FLOWS_SCOPE])
+        self.flow_client = globus_automate_client.FlowsClient(
+                                                    tokens,
+                                                    client_id=self.client_id,
+                                                    app_name=self.app_name,
+                                                    base_url="https://flows.automate.globus.org",
+                                                    authorizer=automate_authorizer)
         self.local_endpoint = globus_sdk.LocalGlobusConnectPersonal().endpoint_id
         self.last_flow_run = {}
 
@@ -64,6 +98,7 @@ class CfdeClient():
         # Otherwise, we must PUT the BDBag on the FAIR RE EP
         else:
             # TODO
+
             put_res = requests.put()
             flow_id = self.http_flow_id
             flow_input = {
@@ -88,7 +123,7 @@ class CfdeClient():
             "flow_instance_id": flow_res["action_id"]
         }
 
-    def check_status(self, flow_id=None, flow_instance_id=None):
+    def check_status(self, flow_id=None, flow_instance_id=None, raw=False):
         """Check the status of a Flow. By default, check the status of the last
         Flow run with this instantiation of the client.
 
@@ -96,6 +131,8 @@ class CfdeClient():
             flow_id (str): The ID of the Flow run. Default: The last run Flow ID.
             flow_instance_id (str): The ID of the Flow to check.
                     Default: The last Flow instance run with this client.
+            raw (bool): Should the status results be returned?
+                    Default: False, to print the results instead.
         """
         if not flow_id:
             flow_id = self.last_flow_run.get("flow_id")
@@ -105,13 +142,46 @@ class CfdeClient():
             raise ValueError("Flow not started and IDs not specified.")
 
         # Get Flow scope and status
-        flow_scope = self.flow_client.get_flow(flow_id)["globus_auth_scope"]
-        flow_status = self.flow_client.flow_action_status(flow_id, flow_scope,
+        flow_def = self.flow_client.get_flow(flow_id)
+        flow_status = self.flow_client.flow_action_status(flow_id, flow_def["globus_auth_scope"],
                                                           flow_instance_id).data
 
-        return {
-            "success": True,
-            "status": flow_status,
-            # TODO: Prettify clean_status
-            "clean_status": flow_status
-        }
+        # Create user-friendly version of status message
+        clean_status = "\nStatus of {} (instance {})\n".format(flow_def["title"], flow_instance_id)
+        # Flow overall status
+        clean_status += "This Flow {}.\n".format(STATE_MSGS[flow_status["status"]])
+        # TransferResult
+        if flow_status["details"]["output"].get("TransferResult"):
+            transfer_status = flow_status["details"]["output"]["TransferResult"]["status"]
+            transfer_result = flow_status["details"]["output"]["TransferResult"]["details"]
+            clean_status += "The Globus Transfer {}.\n".format(STATE_MSGS[transfer_status])
+            if transfer_result["status"] == "SUCCEEDED":
+                clean_status += ("\t{} bytes were transferred.\n"
+                                 .format(transfer_result["bytes_transferred"]))
+            elif transfer_result["status"] == "FAILED":
+                clean_status += ("\tError: {}\n"
+                                 .format(transfer_result["fatal_error"]
+                                         or transfer_result["nice_status"]
+                                         or transfer_result["canceled_by_admin_message"]
+                                         or ("Unknown error on task '{}'"
+                                             .format(transfer_result["task_id"]))))
+        # DerivaResult
+        if flow_status["details"]["output"].get("DerivaResult"):
+            deriva_status = flow_status["details"]["output"]["DerivaResult"]["status"]
+            deriva_result = flow_status["details"]["output"]["DerivaResult"]["details"]
+            clean_status += "The DERIVA ingest {}.\n".format(STATE_MSGS[deriva_status])
+            if deriva_result.get("message"):
+                clean_status += "\t{}\n".format(deriva_result["message"])
+            if deriva_result.get("deriva_link"):
+                clean_status += "\tCatalog ID: {}\n".format(deriva_result["deriva_id"])
+                clean_status += "\tLink to catalog: {}\n".format(deriva_result["deriva_link"])
+
+        # Return or print status
+        if raw:
+            return {
+                "success": True,
+                "status": flow_status,
+                "clean_status": clean_status
+            }
+        else:
+            print(clean_status)
