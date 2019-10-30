@@ -59,7 +59,7 @@ def status(flow_id=None, flow_instance_id=None, client_state_file=None):
             return
     try:
         cfde = CfdeClient()
-        status_res = cfde.check_status(flow_id, flow_instance_id)
+        status_res = cfde.check_status(flow_id, flow_instance_id, raw=True)
     except Exception as e:
         print("Error checking status for Flow '{}': {}".format(flow_id, str(e)))
         return

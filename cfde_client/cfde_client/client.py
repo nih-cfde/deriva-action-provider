@@ -19,10 +19,10 @@ class CfdeClient():
     """The CfdeClient enables easily using the CFDE tools to ingest data."""
     client_id = "417301b1-5101-456a-8a27-423e71a2ae26"
     app_name = "CfdeClient"
-    scopes = (list(globus_automate_client.flows_client.ALL_FLOW_SCOPES)
-              + ["https://auth.globus.org/scopes/0e57d793-f1ac-4eeb-a30f-643b082d68ec/all"])
+    https_scope = "https://auth.globus.org/scopes/0e57d793-f1ac-4eeb-a30f-643b082d68ec/https"
+    all_scopes = (list(globus_automate_client.flows_client.ALL_FLOW_SCOPES) + [https_scope])
     transfer_flow_id = "b1e13f5e-dad6-4524-8c3f-fb39e752a266"
-    http_flow_id = "f172de09-b75b-4b83-9b97-90877b42c774"
+    http_flow_id = "056c26d7-3bf4-4022-8b4d-029875b5e8c0"
     archive_format = "tgz"
     fair_re_dir = "/public/CFDE/metadata/"
     fair_re_url = "https://317ec.36fe.dn.glob.us"
@@ -41,20 +41,21 @@ class CfdeClient():
                     triggers. **Default**: ``False``.
         """
         self.__native_client = NativeClient(client_id=self.client_id, app_name=self.app_name)
-        self.__native_client.login(requested_scopes=self.scopes,
+        self.__native_client.login(requested_scopes=self.all_scopes,
                                    no_browser=kwargs.get("no_browser", False),
                                    refresh_tokens=kwargs.get("refresh_tokens", True),
                                    force=kwargs.get("force", False))
         tokens = self.__native_client.load_tokens_by_scope()
+        flows_token_map = {scope: token["access_token"] for scope, token in tokens.items()}
         automate_authorizer = self.__native_client.get_authorizer(
                                     tokens[globus_automate_client.flows_client.MANAGE_FLOWS_SCOPE])
+        self.__https_authorizer = self.__native_client.get_authorizer(tokens[self.https_scope])
         self.flow_client = globus_automate_client.FlowsClient(
-                                                    tokens,
-                                                    client_id=self.client_id,
+                                                    flows_token_map, self.client_id, "flows_client",
                                                     app_name=self.app_name,
                                                     base_url="https://flows.automate.globus.org",
                                                     authorizer=automate_authorizer)
-        self.local_endpoint = globus_sdk.LocalGlobusConnectPersonal().endpoint_id
+        self.local_endpoint = None #globus_sdk.LocalGlobusConnectPersonal().endpoint_id
         self.last_flow_run = {}
 
     def start_deriva_flow(self, data_path, **kwargs):
@@ -98,11 +99,32 @@ class CfdeClient():
         # Otherwise, we must PUT the BDBag on the FAIR RE EP
         else:
             # TODO
+            headers = {}
+            self.__https_authorizer.set_authorization_header(headers)
+            data_url = "{}{}".format(self.fair_re_url, fair_re_path)
 
-            put_res = requests.put()
+            with open(data_path, 'rb') as bag_file:
+                bag_data = bag_file.read()
+
+            put_res = requests.put(data_url, data=bag_data, headers=headers)
+
+            # Regenerate headers on 401
+            if put_res.status_code == 401:
+                self.__https_authorizer.handle_missing_authorization()
+                self.__https_authorizer.set_authorization_header(headers)
+                put_res = requests.put(data_url, data=bag_data, headers=headers)
+
+            # Error message on failed PUT or any unexpected response
+            if put_res.status_code >= 300:
+                return {
+                    "success": False,
+                    "error": ("Could not upload BDBag to server (error {}):\n{}"
+                              .format(put_res.status_code, put_res.content))
+                }
+
             flow_id = self.http_flow_id
             flow_input = {
-                "data_url": "{}{}".format(self.fair_re_url, fair_re_path)
+                "data_url": data_url
             }
 
         # Get Flow scope
@@ -150,8 +172,12 @@ class CfdeClient():
         clean_status = "\nStatus of {} (instance {})\n".format(flow_def["title"], flow_instance_id)
         # Flow overall status
         clean_status += "This Flow {}.\n".format(STATE_MSGS[flow_status["status"]])
+        # "Details"
+        if flow_status["details"].get("details"):
+            clean_status += "{}\n".format(flow_status["details"]["details"]
+                                          .get("cause", flow_status["details"]["details"]))
         # TransferResult
-        if flow_status["details"]["output"].get("TransferResult"):
+        if flow_status["details"].get("output", {}).get("TransferResult"):
             transfer_status = flow_status["details"]["output"]["TransferResult"]["status"]
             transfer_result = flow_status["details"]["output"]["TransferResult"]["details"]
             clean_status += "The Globus Transfer {}.\n".format(STATE_MSGS[transfer_status])
@@ -166,7 +192,7 @@ class CfdeClient():
                                          or ("Unknown error on task '{}'"
                                              .format(transfer_result["task_id"]))))
         # DerivaResult
-        if flow_status["details"]["output"].get("DerivaResult"):
+        if flow_status["details"].get("output", {}).get("DerivaResult"):
             deriva_status = flow_status["details"]["output"]["DerivaResult"]["status"]
             deriva_result = flow_status["details"]["output"]["DerivaResult"]["details"]
             clean_status += "The DERIVA ingest {}.\n".format(STATE_MSGS[deriva_status])
