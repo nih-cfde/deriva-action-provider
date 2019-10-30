@@ -55,7 +55,7 @@ class CfdeClient():
                                                     app_name=self.app_name,
                                                     base_url="https://flows.automate.globus.org",
                                                     authorizer=automate_authorizer)
-        self.local_endpoint = None #globus_sdk.LocalGlobusConnectPersonal().endpoint_id
+        self.local_endpoint = globus_sdk.LocalGlobusConnectPersonal().endpoint_id
         self.last_flow_run = {}
 
     def start_deriva_flow(self, data_path, **kwargs):
