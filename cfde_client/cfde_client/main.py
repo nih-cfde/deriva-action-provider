@@ -14,9 +14,14 @@ def cli():
 
 @cli.command()
 @click.argument("data-path", nargs=1, type=click.Path(exists=True))
-@click.option("--bag-kwargs-file", type=click.Path(exists=True))
-@click.option("--client-state-file", type=click.Path(exists=True))
-def run(data_path, bag_kwargs_file=None, client_state_file=None):
+@click.option("--catalog-id", default=None, show_default=True)
+@click.option("--output-dir", default=None, show_default=True, type=click.Path(exists=False))
+@click.option("--delete-dir/--keep-dir", is_flag=True, default=False, show_default=True)
+@click.option("--ignore-git/--handle-git", is_flag=True, default=False, show_default=True)
+@click.option("--bag-kwargs-file", type=click.Path(exists=True), default=None)
+@click.option("--client-state-file", type=click.Path(exists=True), default=None)
+def run(data_path, catalog_id, output_dir, delete_dir, ignore_git,
+        bag_kwargs_file, client_state_file):
     """Start the Globus Automate Flow to ingest CFDE data into DERIVA."""
     if bag_kwargs_file:
         with open(bag_kwargs_file) as f:
@@ -28,7 +33,10 @@ def run(data_path, bag_kwargs_file=None, client_state_file=None):
 
     try:
         cfde = CfdeClient()
-        start_res = cfde.start_deriva_flow(data_path, **bag_kwargs)
+        start_res = cfde.start_deriva_flow(data_path, catalog_id=catalog_id,
+                                           output_dir=output_dir, delete_dir=delete_dir,
+                                           handle_git_repos=(not ignore_git),
+                                           **bag_kwargs)
     except Exception as e:
         print("Error while starting Flow: {}".format(str(e)))
         return

@@ -13,6 +13,7 @@ setup(
         "bdbag>=1.5.5",
         "Click>=7.0",
         "fair-research-login>=0.1.3",
+        "GitPython>=3.0.4",
         "globus-automate-client>=0.4",
         "globus-sdk>=1.8.0",
         "requests>=2.22.0"

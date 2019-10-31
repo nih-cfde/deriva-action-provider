@@ -1,7 +1,9 @@
 import os
+import shutil
 
 from bdbag import bdbag_api
 from fair_research_login import NativeClient
+import git
 import globus_automate_client
 import globus_sdk
 import requests
@@ -58,28 +60,102 @@ class CfdeClient():
         self.local_endpoint = globus_sdk.LocalGlobusConnectPersonal().endpoint_id
         self.last_flow_run = {}
 
-    def start_deriva_flow(self, data_path, **kwargs):
+    def start_deriva_flow(self, data_path, catalog_id=None, output_dir=None, delete_dir=False,
+                          handle_git_repos=True, **kwargs):
         """Start the Globus Automate Flow to ingest CFDE data into DERIVA.
 
         Arguments:
             data_path (str): The path to the data to ingest into DERIVA. The path can be:
-                    1) A directory to be made into a BDBag
-                    2) A premade BDBag directory
-                    3) A premade BDBag in an archive file
+                    1) A directory to be formatted into a BDBag
+                    2) A Git repository to be copied into a BDBag
+                    3) A premade BDBag directory
+                    4) A premade BDBag in an archive file
+            catalog_id (int or str): The ID of the DERIVA catalog to ingest into.
+                    Default None, to create a new catalog.
+            output_dir (str): The path to create an output directory in. The resulting
+                    BDBag archive will be named after this directory.
+                    If not set, the directory will be turned into a BDBag in-place.
+                    For Git repositories, this is automatically set, but can be overridden.
+                    If data_path is a file, this has no effect.
+                    This dir MUST NOT be in the `data_path` directory or any subdirectories.
+                    Default None.
+            delete_dir (bool): Should the output_dir be deleted after submission?
+                    Has no effect if output_dir is not specified.
+                    For Git repositories, this is always True.
+                    Default False.
+            handle_git_repos (bool): Should Git repositories be detected and handled?
+                    When this is False, Git repositories are handled as simple directories
+                    instead of Git repositories.
+                    Default True.
 
         Keyword arguments are passed directly to the ``make_bag()`` function of the
         BDBag API (see https://github.com/fair-research/bdbag for details).
         """
         data_path = os.path.abspath(data_path)
+        if not os.path.exists(data_path):
+            raise FileNotFoundError("Path '{}' does not exist".format(data_path))
+
+        if handle_git_repos:
+            # If Git repo, set output_dir appropriately
+            try:
+                repo = git.Repo(data_path, search_parent_directories=True)
+            # Not Git repo
+            except git.InvalidGitRepositoryError:
+                pass
+            # Path not found, turn into standard FileNotFoundError
+            except git.NoSuchPathError:
+                raise FileNotFoundError("Path '{}' does not exist".format(data_path))
+            # Is Git repo
+            else:
+                # Needs to not have slash at end - is known Git repo already, slash
+                # interferes with os.path.basename/dirname
+                if data_path.endswith("/"):
+                    data_path = data_path[:-1]
+                # Set output_dir to new dir named with HEAD commit hash
+                new_dir_name = "{}_{}".format(os.path.basename(data_path), str(repo.head.commit))
+                output_dir = os.path.join(os.path.dirname(data_path), new_dir_name)
+                # Delete temp dir after archival
+                delete_dir = True
+
         # If dir and not already BDBag, make BDBag
         if os.path.isdir(data_path) and not bdbag_api.is_bag(data_path):
+            # If output_dir specified, copy data to output dir first
+            if output_dir:
+                output_dir = os.path.abspath(output_dir)
+                # If shutil.copytree is called when the destination dir is inside the source dir
+                # by more than one layer, it will recurse infinitely.
+                # (e.g. /source => /source/dir/dest)
+                # Exactly one layer is technically okay (e.g. /source => /source/dest),
+                # but it's easier to forbid all parent/child dir cases.
+                # Check for this error condition by determining if output_dir is a child
+                # of data_path.
+                if os.path.commonpath([data_path]) == os.path.commonpath([data_path, output_dir]):
+                    raise ValueError("The output_dir ('{}') must not be in data_path ('{}')"
+                                     .format(output_dir, data_path))
+                try:
+                    shutil.copytree(data_path, output_dir)
+                except FileExistsError:
+                    raise FileExistsError(("The output directory must not exist. "
+                                           "Delete '{}' to submit.\nYou can set delete_dir=True "
+                                           "to avoid this issue in the future.").format(output_dir))
+                # Process new dir instead of old path
+                data_path = output_dir
+            # If output_dir not specified, never delete data dir
+            else:
+                delete_dir = False
+            # Make bag
             bdbag_api.make_bag(data_path, **kwargs)
             if not bdbag_api.is_bag(data_path):
                 raise ValueError("Failed to create BDBag from {}".format(data_path))
+
         # If dir (must be BDBag at this point), archive
         if os.path.isdir(data_path):
+            new_data_path = bdbag_api.archive_bag(data_path, self.archive_format)
+            # If requested (e.g. Git repo copied dir), delete data dir
+            if delete_dir:
+                shutil.rmtree(data_path)
             # Overwrite data_path - don't care about dir for uploading
-            data_path = bdbag_api.archive_bag(data_path, self.archive_format)
+            data_path = new_data_path
 
         # Now BDBag is archived file
         # Set path on destination (FAIR RE EP)
@@ -96,9 +172,10 @@ class CfdeClient():
                 "is_directory": False,
                 "restore": False
             }
+            if catalog_id:
+                flow_input["catalog_id"] = str(catalog_id)
         # Otherwise, we must PUT the BDBag on the FAIR RE EP
         else:
-            # TODO
             headers = {}
             self.__https_authorizer.set_authorization_header(headers)
             data_url = "{}{}".format(self.fair_re_url, fair_re_path)
@@ -126,6 +203,8 @@ class CfdeClient():
             flow_input = {
                 "data_url": data_url
             }
+            if catalog_id:
+                flow_input["catalog_id"] = str(catalog_id)
 
         # Get Flow scope
         flow_def = self.flow_client.get_flow(flow_id)
@@ -174,8 +253,11 @@ class CfdeClient():
         clean_status += "This Flow {}.\n".format(STATE_MSGS[flow_status["status"]])
         # "Details"
         if flow_status["details"].get("details"):
-            clean_status += "{}\n".format(flow_status["details"]["details"]
-                                          .get("cause", flow_status["details"]["details"]))
+            if flow_status["details"]["details"].get("state_name"):
+                clean_status += ("Current Flow Step: {}"
+                                 .format(flow_status["details"]["details"]["state_name"]))
+            if flow_status["details"]["details"].get("cause"):
+                clean_status += "Error: {}\n".format(flow_status["details"]["details"]["cause"])
         # TransferResult
         if flow_status["details"].get("output", {}).get("TransferResult"):
             transfer_status = flow_status["details"]["output"]["TransferResult"]["status"]
@@ -196,6 +278,8 @@ class CfdeClient():
             deriva_status = flow_status["details"]["output"]["DerivaResult"]["status"]
             deriva_result = flow_status["details"]["output"]["DerivaResult"]["details"]
             clean_status += "The DERIVA ingest {}.\n".format(STATE_MSGS[deriva_status])
+            if deriva_result.get("error"):
+                clean_status += "\tError: {}\n".format(deriva_result["error"])
             if deriva_result.get("message"):
                 clean_status += "\t{}\n".format(deriva_result["message"])
             if deriva_result.get("deriva_link"):
