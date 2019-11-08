@@ -292,6 +292,7 @@ def action_restore(action_id, url, catalog=None):
                 "error": "Error in action setup: " + str(e)
             }
         }
+        logger.error(f"{action_id}: Error in action setup: {repr(e)}")
         # If update fails, last-ditch effort is write to error file for debugging
         try:
             utils.update_action_status(TBL, action_id, error_status)
@@ -348,6 +349,7 @@ def action_restore(action_id, url, catalog=None):
                 "error": f"Unable to run restore script: {str(e)}"
             }
         }
+        logger.error(f"{action_id}: Unable to run restore script: {repr(e)}")
         try:
             utils.update_action_status(TBL, action_id, error_status)
         except Exception as e2:
@@ -371,6 +373,7 @@ def action_restore(action_id, url, catalog=None):
                 "error": f"Restore script output parsing failed: {str(e)}"
             }
         }
+        logger.error(f"{action_id}: Restore script output parsing failed: {repr(e)}")
         try:
             utils.update_action_status(TBL, action_id, error_status)
         except Exception as e2:
@@ -416,6 +419,7 @@ def action_ingest(action_id, url, catalog_id=None, acls=None):
                 "error": "Error in action setup: " + str(e)
             }
         }
+        logger.error(f"{action_id}: Error in action setup: {repr(e)}")
         # If update fails, last-ditch effort is write to error file for debugging
         try:
             utils.update_action_status(TBL, action_id, error_status)
@@ -455,8 +459,13 @@ def action_ingest(action_id, url, catalog_id=None, acls=None):
         # Get BDBag extract dir (assume exactly one dir)
         bdbag_dir = [dirname for dirname in os.listdir(data_dir)
                      if os.path.isdir(os.path.join(data_dir, dirname))][0]
-        # Dir is repeated because of BDBag structure
-        bdbag_data = os.path.join(data_dir, bdbag_dir, bdbag_dir, "data")
+        # Make full path
+        bdbag_dir = os.path.join(data_dir, bdbag_dir)
+        # Dir is repeated because of BDBag structure; find inner dir (exactly one)
+        bdbag_inner = [dirname for dirname in os.listdir(bdbag_dir)
+                       if os.path.isdir(os.path.join(bdbag_dir, dirname))][0]
+        # Make full path to data dir
+        bdbag_data = os.path.join(bdbag_dir, bdbag_inner, "data")
         # Get schema file (assume exactly one JSON file)
         schema_file = [filename for filename in os.listdir(bdbag_data)
                        if filename.endswith(".json")][0]
@@ -502,6 +511,7 @@ def action_ingest(action_id, url, catalog_id=None, acls=None):
                 "error": f"Error ingesting to DERIVA: {str(e)}"
             }
         }
+        logger.error(f"{action_id}: Error ingesting to DERIVA: {repr(e)}")
         try:
             utils.update_action_status(TBL, action_id, error_status)
         except Exception as e2:
