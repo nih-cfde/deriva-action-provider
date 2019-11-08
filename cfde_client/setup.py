@@ -12,6 +12,7 @@ setup(
     install_requires=[
         "bdbag>=1.5.5",
         "Click>=7.0",
+        "datapackage>=1.10.0",
         "fair-research-login>=0.1.3",
         "GitPython>=3.0.4",
         "globus-automate-client>=0.4",

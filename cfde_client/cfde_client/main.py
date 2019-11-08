@@ -18,9 +18,10 @@ def cli():
 @click.option("--output-dir", default=None, show_default=True, type=click.Path(exists=False))
 @click.option("--delete-dir/--keep-dir", is_flag=True, default=False, show_default=True)
 @click.option("--ignore-git/--handle-git", is_flag=True, default=False, show_default=True)
+@click.option("--no-validate/--validate", is_flag=True, default=False, show_default=True)
 @click.option("--bag-kwargs-file", type=click.Path(exists=True), default=None)
 @click.option("--client-state-file", type=click.Path(exists=True), default=None)
-def run(data_path, catalog_id, output_dir, delete_dir, ignore_git,
+def run(data_path, catalog_id, output_dir, delete_dir, ignore_git, no_validate,
         bag_kwargs_file, client_state_file):
     """Start the Globus Automate Flow to ingest CFDE data into DERIVA."""
     if bag_kwargs_file:
@@ -36,14 +37,18 @@ def run(data_path, catalog_id, output_dir, delete_dir, ignore_git,
         start_res = cfde.start_deriva_flow(data_path, catalog_id=catalog_id,
                                            output_dir=output_dir, delete_dir=delete_dir,
                                            handle_git_repos=(not ignore_git),
+                                           validate_contents=(not no_validate),
                                            **bag_kwargs)
     except Exception as e:
         print("Error while starting Flow: {}".format(str(e)))
         return
     else:
-        with open(client_state_file, 'w') as out:
-            json.dump(start_res, out)
-        print(start_res["message"])
+        if not start_res["success"]:
+            print("Error during Flow startup: {}".format(start_res["error"]))
+        else:
+            with open(client_state_file, 'w') as out:
+                json.dump(start_res, out)
+            print(start_res["message"])
 
 
 @cli.command()

@@ -2,6 +2,7 @@ import os
 import shutil
 
 from bdbag import bdbag_api
+from datapackage import Package
 from fair_research_login import NativeClient
 import git
 import globus_automate_client
@@ -15,6 +16,81 @@ STATE_MSGS = {
     "SUCCEEDED": "has completed successfully",
     "FAILED": "has failed"
 }
+
+
+def ts_validate(data_path, existing_catalog=None):
+    """Validate a given TableSchema using the Datapackage package.
+
+    Arguments:
+        data_path (str): Path to the TableSchema JSON or BDBag directory
+                or BDBag archive to validate.
+        existing_catalog (int or str): An existing catalog to validate against.
+                If not specified, the data is only validated against the defined schema.
+                Default None.
+
+    Returns:
+        dict: The validation results.
+            is_valid (bool): Is the TableSchema valid?
+            raw_errors (list): The raw Exceptions generated from any validation errors.
+            error (str): A formatted error message about any validation errors.
+    """
+    # If data_path is BDBag archive, unarchive to temp dir
+    try:
+        data_path = bdbag_api.extract_bag(data_path, temp=True)
+    # data_path is not archive
+    except RuntimeError:
+        pass
+    # If data_path is dir (incl. if was unarchived), find JSON desc
+    if os.path.isdir(data_path):
+        # If 'data' dir present, search there instead
+        if "data" in os.listdir(data_path):
+            data_path = os.path.join(data_path, "data")
+        # Find .json file
+        desc_file_list = [filename for filename in os.listdir(data_path)
+                          if filename.endswith(".json")]
+        if len(desc_file_list) < 1:
+            return {
+                "is_valid": False,
+                "raw_errors": [FileNotFoundError("No TableSchema JSON file found.")],
+                "error": "No TableSchema JSON file found."
+            }
+        elif len(desc_file_list) > 1:
+            return {
+                "is_valid": False,
+                "raw_errors": [RuntimeError("Multiple JSON files found in directory.")],
+                "error": "Multiple JSON files found in directory."
+            }
+        else:
+            data_path = os.path.join(data_path, desc_file_list[0])
+    # data_path should/must be file now (JSON desc)
+    if not os.path.isfile(data_path):
+        return {
+            "is_valid": False,
+            "raw_errors": [ValueError("Path '{}' does not refer to a file".format(data_path))],
+            "error": "Path '{}' does not refer to a file".format(data_path)
+        }
+
+    # Read into Package, return error on failure
+    try:
+        pkg = Package(data_path)
+    except Exception as e:
+        return {
+            "is_valid": False,
+            "raw_errors": [e],
+            "error": str(e)
+        }
+
+    # TODO: Pull schema from existing catalog, validate against that too
+    if existing_catalog:
+        existing_catalog = str(existing_catalog)
+        print("Warning: Currently unable to validate data against existing catalog.")
+
+    # Actually check and return package validity based on Package validation
+    return {
+        "is_valid": pkg.valid,
+        "raw_errors": pkg.errors,
+        "error": "\n".join([str(err) for err in pkg.errors])
+    }
 
 
 class CfdeClient():
@@ -61,7 +137,7 @@ class CfdeClient():
         self.last_flow_run = {}
 
     def start_deriva_flow(self, data_path, catalog_id=None, output_dir=None, delete_dir=False,
-                          handle_git_repos=True, **kwargs):
+                          handle_git_repos=True, validate_contents=True, **kwargs):
         """Start the Globus Automate Flow to ingest CFDE data into DERIVA.
 
         Arguments:
@@ -87,6 +163,13 @@ class CfdeClient():
                     When this is False, Git repositories are handled as simple directories
                     instead of Git repositories.
                     Default True.
+            validate_contents (bool): Should the BDBag contents be validated for consistency?
+                    If a catalog_id is specified, the data is validated against that catalog's
+                    schema. If no catalog_idis specified, the data is only checked against the
+                    defined schema.
+                    Default True.
+
+                    NOTE: Validation against existing catalog schema not yet implemented.
 
         Keyword arguments are passed directly to the ``make_bag()`` function of the
         BDBag API (see https://github.com/fair-research/bdbag for details).
@@ -156,6 +239,16 @@ class CfdeClient():
                 shutil.rmtree(data_path)
             # Overwrite data_path - don't care about dir for uploading
             data_path = new_data_path
+
+        # Validate TableSchema in BDBag if requested
+        if validate_contents:
+            validation_res = ts_validate(data_path, catalog_id)
+            if not validation_res["is_valid"]:
+                return {
+                    "success": False,
+                    "error": ("TableSchema invalid due to the following errors: \n{}\n"
+                              .format(validation_res["error"]))
+                }
 
         # Now BDBag is archived file
         # Set path on destination (FAIR RE EP)
