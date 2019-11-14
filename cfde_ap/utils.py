@@ -16,7 +16,7 @@ import requests
 
 from cfde_ap import CONFIG
 from . import error as err
-#from .cfde_datapackage import CfdeDataPackage
+# from .cfde_datapackage import CfdeDataPackage
 from cfde_deriva.datapackage import CfdeDataPackage
 
 
@@ -364,7 +364,7 @@ def get_deriva_token():
     # TODO: When decision is made about user auth vs. conf client auth, implement.
     #       Currently using personal refresh token for scope.
     #       Refresh token will expire in six months(?)
-    #       Date last generated: 8-30-2019
+    #       Date last generated: 9-26-2019
 
     return globus_sdk.RefreshTokenAuthorizer(
                         refresh_token=CONFIG["TEMP_REFRESH_TOKEN"],
@@ -372,15 +372,24 @@ def get_deriva_token():
            ).access_token
 
 
-def download_data(transfer_client, source_loc, local_ep, local_path):
+def _generate_new_deriva_token():
+    # Generate new Refresh Token to be used in get_deriva_token()
+    native_client = globus_sdk.NativeAppAuthClient(CONFIG["GLOBUS_NATIVE_APP"])
+    native_flow = native_client.oauth2_start_flow(
+                                    requested_scopes=("https://auth.globus.org/scopes/demo."
+                                                      "derivacloud.org/deriva_all"),
+                                    refresh_tokens=True)
+    code = input(f"Auth at '{native_flow.get_authorize_url()}' and paste code:\n")
+    tokens = native_flow.exchange_code_for_tokens(code)
+    return tokens["refresh_token"]
+
+
+def download_data(source_loc, local_path):
     """Download data from a remote host to the configured machine.
     (Many sources to one destination)
 
     Arguments:
-        transfer_client (TransferClient): An authenticated TransferClient with access to the data.
-                                          Technically unnecessary for non-Globus data locations.
         source_loc (list of str): The location(s) of the data.
-        local_ep (str): The local machine's endpoint ID.
         local_path (str): The path to the local storage location.
 
     Returns:
@@ -399,34 +408,10 @@ def download_data(transfer_client, source_loc, local_ep, local_path):
         source_loc = [source_loc]
 
     # Download data locally
-    for raw_loc in source_loc:
-        location = normalize_globus_uri(raw_loc)
+    for location in source_loc:
         loc_info = urllib.parse.urlparse(location)
-        # Globus Transfer
-        if loc_info.scheme == "globus":
-            if filename:
-                transfer_path = os.path.join(local_path, filename)
-            else:
-                transfer_path = local_path
-            # Check that data not already in place
-            if (loc_info.netloc != local_ep
-                    and loc_info.path != transfer_path):
-                # Transfer locally
-                transfer = mdf_toolbox.custom_transfer(
-                                transfer_client, loc_info.netloc, local_ep,
-                                [(loc_info.path, transfer_path)],
-                                interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                                inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
-                for event in transfer:
-                    if not event["success"]:
-                        logger.info("Transfer is_error: {} - {}"
-                                    .format(event.get("code", "No code found"),
-                                            event.get("description", "No description found")))
-                if not event["success"]:
-                    logger.error("Transfer failed: {}".format(event))
-                    raise ValueError(event)
         # HTTP(S)
-        elif loc_info.scheme.startswith("http"):
+        if loc_info.scheme.startswith("http"):
             # Get default filename and extension
             http_filename = os.path.basename(loc_info.path)
             if not http_filename:
@@ -485,97 +470,35 @@ def download_data(transfer_client, source_loc, local_ep, local_path):
     }
 
 
-def normalize_globus_uri(location):
-    """Normalize a Globus Web App link or Google Drive URI into a globus:// URI.
-    For Google Drive URIs, the file(s) must be shared with
-    materialsdatafacility@gmail.com.
-    If the URI is not a Globus Web App link or Google Drive URI,
-    it is returned unchanged.
-    Arguments:
-        location (str): One URI to normalize.
-    Returns:
-        str: The normalized URI, or the original URI if no normalization was possible.
-    """
-    loc_info = urllib.parse.urlparse(location)
-    # Globus Web App link into globus:// form
-    if (location.startswith("https://www.globus.org/app/transfer")
-            or location.startswith("https://app.globus.org/file-manager")):
-        data_info = urllib.parse.unquote(loc_info.query)
-        # EP ID is in origin or dest
-        ep_start = data_info.find("origin_id=")
-        if ep_start < 0:
-            ep_start = data_info.find("destination_id=")
-            if ep_start < 0:
-                raise ValueError("Invalid Globus Transfer UI link")
-            else:
-                ep_start += len("destination_id=")
-        else:
-            ep_start += len("origin_id=")
-        ep_end = data_info.find("&", ep_start)
-        if ep_end < 0:
-            ep_end = len(data_info)
-        ep_id = data_info[ep_start:ep_end]
-
-        # Same for path
-        path_start = data_info.find("origin_path=")
-        if path_start < 0:
-            path_start = data_info.find("destination_path=")
-            if path_start < 0:
-                raise ValueError("Invalid Globus Transfer UI link")
-            else:
-                path_start += len("destination_path=")
-        else:
-            path_start += len("origin_path=")
-        path_end = data_info.find("&", path_start)
-        if path_end < 0:
-            path_end = len(data_info)
-        path = data_info[path_start:path_end]
-
-        # Make new location
-        new_location = "globus://{}{}".format(ep_id, path)
-
-    # Google Drive protocol into globus:// form
-    elif loc_info.scheme in ["gdrive", "google", "googledrive"]:
-        # Correct form is "google:///path/file.dat"
-        # (three slashes - two for scheme end, one for path start)
-        # But if a user uses two slashes, the netloc will incorrectly be the top dir
-        # (netloc="path", path="/file.dat")
-        # Otherwise netloc is nothing (which is correct)
-        if loc_info.netloc:
-            gpath = "/" + loc_info.netloc + loc_info.path
-        else:
-            gpath = loc_info.path
-        # Don't use os.path.join because gpath starts with /
-        # GDRIVE_ROOT does not end in / to make compatible
-        new_location = "globus://{}{}{}".format(CONFIG["GDRIVE_EP"], CONFIG["GDRIVE_ROOT"], gpath)
-
-    # Default - do nothing
-    else:
-        new_location = location
-
-    return new_location
-
-
-def full_deriva_ingest(servername, data_json_file, acls=None):
-    """Perform a full ingest to DERIVA into a new catalog, using the CfdeDataPackage.
+def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
+    """Perform an ingest to DERIVA into a catalog, using the CfdeDataPackage.
 
     Arguments:
         servername (str): The name of the DERIVA server.
         data_json_file (str): The path to the JSON file with TableSchema data.
+        catalog_id (str): If updating an existing catalog, the existing catalog ID.
+                Default None, to create a new catalog.
+        acls (dict): The ACLs to set on the catalog. Currently nonfunctional.
+                Default None.
 
     Returns:
-        #TODO
+        dict: The result of the ingest.
+            success (bool): True when the ingest was successful.
+            catalog_id (str): The catalog's ID.
     """
-    # datapack = CfdeDataPackage(data_json_file, verbose=False)
-    datapack = CfdeDataPackage(data_json_file)
+    datapack = CfdeDataPackage(data_json_file, verbose=False)
     # Format credentials in DerivaServer-expected format
     creds = {
         "bearer-token": get_deriva_token()
     }
     server = DerivaServer("https", servername, creds)
-    catalog = server.create_ermrest_catalog()
+    if catalog_id:
+        catalog = server.connect_ermrest(catalog_id)
+    else:
+        catalog = server.create_ermrest_catalog()
     datapack.set_catalog(catalog)
-    datapack.provision()
+    if not catalog_id:
+        datapack.provision()
     # datapack.apply_acls(acls)
     datapack.load_data_files()
 

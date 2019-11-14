@@ -63,6 +63,9 @@ def handle_invalid_usage(error):
 
 @app.before_request
 def before_request():
+    # Service alive check can skip validation
+    if request.path == "/ping":
+        return {"success": True}
     wrapped_req = FlaskOpenAPIRequest(request)
     validation_result = request_validator.validate(wrapped_req)
     if validation_result.errors:
@@ -116,12 +119,6 @@ def meta():
                                             allow_all_authenticated_users=True):
         raise err.NotAuthorized("You cannot view this Action Provider.")
     return jsonify(resp)
-
-
-@app.route("/ping", methods=["GET"])
-def health_ping():
-    # Show service is alive
-    return jsonify({"success": True})
 
 
 @app.route(ROOT+"run", methods=["POST"])
@@ -236,21 +233,28 @@ def release(action_id):
 #######################################
 
 def start_action(action_id, action_data):
+    # Transform input from Automate, if Transferred before ingesting
+    if action_data.get("fair_re_path"):
+        action_data["data_url"] = CONFIG["FAIR_RE_URL"] + action_data.pop("fair_re_path")
+
     # Restore Action
-    if action_data.get("restore_url"):
-        logger.info(f"{action_id}: Starting Deriva restore")
+    if action_data.get("restore"):
+        logger.info(f"{action_id}: Starting Deriva restore into "
+                    f"{action_data.get('catalog_id', 'new catalog')}")
         # Spawn new process
         # TODO: Process management
         #       Currently assuming process manages itself
-        args = (action_id, action_data["restore_url"], action_data.get("restore_catalog"))
-        driver = multiprocessing.Process(target=restore_deriva, args=args, name=action_id)
+        args = (action_id, action_data["data_url"], action_data.get("catalog_id"))
+        driver = multiprocessing.Process(target=action_restore, args=args, name=action_id)
         driver.start()
     # Ingest Action
-    elif action_data.get("ingest_url"):
-        logger.info(f"{action_id}: Starting Deriva new creation")
+    else:
+        logger.info(f"{action_id}: Starting Deriva ingest into "
+                    f"{action_data.get('catalog_id', 'new catalog')}")
         # Spawn new process
-        args = (action_id, action_data["ingest_url"], action_data.get("ingest_catalog_acls"))
-        driver = multiprocessing.Process(target=create_deriva, args=args, name=action_id)
+        args = (action_id, action_data["data_url"], action_data.get("catalog_id"),
+                action_data.get("catalog_acls"))
+        driver = multiprocessing.Process(target=action_ingest, args=args, name=action_id)
         driver.start()
     return
 
@@ -266,7 +270,7 @@ def cancel_action(action_id):
 # Asynchronous actions
 #######################################
 
-def restore_deriva(action_id, url, catalog=None):
+def action_restore(action_id, url, catalog=None):
     token = utils.get_deriva_token()
 
     # Download backup zip file
@@ -288,6 +292,7 @@ def restore_deriva(action_id, url, catalog=None):
                 "error": "Error in action setup: " + str(e)
             }
         }
+        logger.error(f"{action_id}: Error in action setup: {repr(e)}")
         # If update fails, last-ditch effort is write to error file for debugging
         try:
             utils.update_action_status(TBL, action_id, error_status)
@@ -344,6 +349,7 @@ def restore_deriva(action_id, url, catalog=None):
                 "error": f"Unable to run restore script: {str(e)}"
             }
         }
+        logger.error(f"{action_id}: Unable to run restore script: {repr(e)}")
         try:
             utils.update_action_status(TBL, action_id, error_status)
         except Exception as e2:
@@ -367,6 +373,7 @@ def restore_deriva(action_id, url, catalog=None):
                 "error": f"Restore script output parsing failed: {str(e)}"
             }
         }
+        logger.error(f"{action_id}: Restore script output parsing failed: {repr(e)}")
         try:
             utils.update_action_status(TBL, action_id, error_status)
         except Exception as e2:
@@ -394,12 +401,12 @@ def restore_deriva(action_id, url, catalog=None):
     return
 
 
-def create_deriva(action_id, url, acls=None):
+def action_ingest(action_id, url, catalog_id=None, acls=None):
     # Download ingest BDBag
     # Excessive try-except blocks because there's (currently) no process management;
     # if the action fails, it needs to always self-report failure
 
-    logger.debug(f"{action_id}: Deriva creation process started")
+    logger.debug(f"{action_id}: Deriva ingest process started for {catalog_id or 'new catalog'}")
     # Setup
     try:
         if acls is None:
@@ -412,6 +419,7 @@ def create_deriva(action_id, url, acls=None):
                 "error": "Error in action setup: " + str(e)
             }
         }
+        logger.error(f"{action_id}: Error in action setup: {repr(e)}")
         # If update fails, last-ditch effort is write to error file for debugging
         try:
             utils.update_action_status(TBL, action_id, error_status)
@@ -421,10 +429,12 @@ def create_deriva(action_id, url, acls=None):
                           f"After error '{repr(e)}'")
         return
 
+    # TODO: Check that catalog exists if catalog_id set
+
     # Download and unarchive link
     logger.debug(f"{action_id}: Downloading '{url}'")
     try:
-        dl_res = utils.download_data(None, [url], CONFIG["LOCAL_EP"], data_dir)
+        dl_res = utils.download_data([url], data_dir)
         if not dl_res["success"]:
             raise ValueError(str(dl_res))
     except Exception as e:
@@ -449,8 +459,13 @@ def create_deriva(action_id, url, acls=None):
         # Get BDBag extract dir (assume exactly one dir)
         bdbag_dir = [dirname for dirname in os.listdir(data_dir)
                      if os.path.isdir(os.path.join(data_dir, dirname))][0]
-        # Dir is repeated because of BDBag structure
-        bdbag_data = os.path.join(data_dir, bdbag_dir, bdbag_dir, "data")
+        # Make full path
+        bdbag_dir = os.path.join(data_dir, bdbag_dir)
+        # Dir is repeated because of BDBag structure; find inner dir (exactly one)
+        bdbag_inner = [dirname for dirname in os.listdir(bdbag_dir)
+                       if os.path.isdir(os.path.join(bdbag_dir, dirname))][0]
+        # Make full path to data dir
+        bdbag_data = os.path.join(bdbag_dir, bdbag_inner, "data")
         # Get schema file (assume exactly one JSON file)
         schema_file = [filename for filename in os.listdir(bdbag_data)
                        if filename.endswith(".json")][0]
@@ -477,12 +492,13 @@ def create_deriva(action_id, url, acls=None):
         # TODO: Determine schema name from data
         schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
 
-        ingest_res = utils.full_deriva_ingest(servername, schema_file_path, acls)
+        ingest_res = utils.deriva_ingest(servername, schema_file_path,
+                                         catalog_id=catalog_id, acls=acls)
         if not ingest_res["success"]:
             error_status = {
                 "status": "FAILED",
                 "details": {
-                    "error": f"Unable to create new DERIVA catalog: {ingest_res.get('error')}"
+                    "error": f"Unable to ingest to DERIVA: {ingest_res.get('error')}"
                 }
             }
             utils.update_action_status(TBL, action_id, error_status)
@@ -492,9 +508,10 @@ def create_deriva(action_id, url, acls=None):
         error_status = {
             "status": "FAILED",
             "details": {
-                "error": f"Unable to create new DERIVA catalog: {str(e)}"
+                "error": f"Error ingesting to DERIVA: {str(e)}"
             }
         }
+        logger.error(f"{action_id}: Error ingesting to DERIVA: {repr(e)}")
         try:
             utils.update_action_status(TBL, action_id, error_status)
         except Exception as e2:
