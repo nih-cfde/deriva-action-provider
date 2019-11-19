@@ -9,23 +9,17 @@ import globus_automate_client
 import globus_sdk
 import requests
 
-
-STATE_MSGS = {
-    "ACTIVE": "is still in progress",
-    "INACTIVE": "has stalled, and may need help to resume",
-    "SUCCEEDED": "has completed successfully",
-    "FAILED": "has failed"
-}
+from cfde_client import CONFIG
 
 
-def ts_validate(data_path, existing_catalog=None):
+def ts_validate(data_path, schema=None):
     """Validate a given TableSchema using the Datapackage package.
 
     Arguments:
         data_path (str): Path to the TableSchema JSON or BDBag directory
                 or BDBag archive to validate.
-        existing_catalog (int or str): An existing catalog to validate against.
-                If not specified, the data is only validated against the defined schema.
+        schema (str): The schema to validate against. If not provided,
+                the data is only validated against the defined TableSchema.
                 Default None.
 
     Returns:
@@ -81,9 +75,9 @@ def ts_validate(data_path, existing_catalog=None):
         }
 
     # TODO: Pull schema from existing catalog, validate against that too
-    if existing_catalog:
-        existing_catalog = str(existing_catalog)
-        print("Warning: Currently unable to validate data against existing catalog.")
+    if schema:
+        print("Warning: Currently unable to validate data against existing schema '{}'."
+              .format(schema))
 
     # Actually check and return package validity based on Package validation
     return {
@@ -97,13 +91,7 @@ class CfdeClient():
     """The CfdeClient enables easily using the CFDE tools to ingest data."""
     client_id = "417301b1-5101-456a-8a27-423e71a2ae26"
     app_name = "CfdeClient"
-    https_scope = "https://auth.globus.org/scopes/0e57d793-f1ac-4eeb-a30f-643b082d68ec/https"
-    all_scopes = (list(globus_automate_client.flows_client.ALL_FLOW_SCOPES) + [https_scope])
-    transfer_flow_id = "b1e13f5e-dad6-4524-8c3f-fb39e752a266"
-    http_flow_id = "056c26d7-3bf4-4022-8b4d-029875b5e8c0"
     archive_format = "tgz"
-    fair_re_dir = "/public/CFDE/metadata/"
-    fair_re_url = "https://317ec.36fe.dn.glob.us"
 
     def __init__(self, **kwargs):
         """Create a CfdeClient.
@@ -119,7 +107,7 @@ class CfdeClient():
                     triggers. **Default**: ``False``.
         """
         self.__native_client = NativeClient(client_id=self.client_id, app_name=self.app_name)
-        self.__native_client.login(requested_scopes=self.all_scopes,
+        self.__native_client.login(requested_scopes=CONFIG["ALL_SCOPES"],
                                    no_browser=kwargs.get("no_browser", False),
                                    refresh_tokens=kwargs.get("refresh_tokens", True),
                                    force=kwargs.get("force", False))
@@ -127,7 +115,7 @@ class CfdeClient():
         flows_token_map = {scope: token["access_token"] for scope, token in tokens.items()}
         automate_authorizer = self.__native_client.get_authorizer(
                                     tokens[globus_automate_client.flows_client.MANAGE_FLOWS_SCOPE])
-        self.__https_authorizer = self.__native_client.get_authorizer(tokens[self.https_scope])
+        self.__https_authorizer = self.__native_client.get_authorizer(tokens[CONFIG["HTTPS_SCOPE"]])
         self.flow_client = globus_automate_client.FlowsClient(
                                                     flows_token_map, self.client_id, "flows_client",
                                                     app_name=self.app_name,
@@ -136,8 +124,8 @@ class CfdeClient():
         self.local_endpoint = globus_sdk.LocalGlobusConnectPersonal().endpoint_id
         self.last_flow_run = {}
 
-    def start_deriva_flow(self, data_path, catalog_id=None, output_dir=None, delete_dir=False,
-                          handle_git_repos=True, validate_contents=True, **kwargs):
+    def start_deriva_flow(self, data_path, catalog_id=None, schema=None, server=None,
+                          output_dir=None, delete_dir=False, handle_git_repos=True, **kwargs):
         """Start the Globus Automate Flow to ingest CFDE data into DERIVA.
 
         Arguments:
@@ -148,6 +136,10 @@ class CfdeClient():
                     4) A premade BDBag in an archive file
             catalog_id (int or str): The ID of the DERIVA catalog to ingest into.
                     Default None, to create a new catalog.
+            schema (str): The named schema or schema file link to validate data against.
+                    Default None, to only validate against the declared TableSchema.
+            server (str): The DERIVA server to ingest to.
+                    Default None, to use the Action Provider-set default.
             output_dir (str): The path to create an output directory in. The resulting
                     BDBag archive will be named after this directory.
                     If not set, the directory will be turned into a BDBag in-place.
@@ -163,13 +155,6 @@ class CfdeClient():
                     When this is False, Git repositories are handled as simple directories
                     instead of Git repositories.
                     Default True.
-            validate_contents (bool): Should the BDBag contents be validated for consistency?
-                    If a catalog_id is specified, the data is validated against that catalog's
-                    schema. If no catalog_idis specified, the data is only checked against the
-                    defined schema.
-                    Default True.
-
-                    NOTE: Validation against existing catalog schema not yet implemented.
 
         Keyword arguments are passed directly to the ``make_bag()`` function of the
         BDBag API (see https://github.com/fair-research/bdbag for details).
@@ -177,6 +162,13 @@ class CfdeClient():
         data_path = os.path.abspath(data_path)
         if not os.path.exists(data_path):
             raise FileNotFoundError("Path '{}' does not exist".format(data_path))
+
+        if catalog_id in CONFIG["KNOWN_CATALOGS"]:
+            if schema:
+                raise ValueError("You may not specify a schema ('{}') when ingesting to "
+                                 "a named catalog ('{}'). Retry without specifying "
+                                 "a schema.".format(schema, catalog_id))
+            schema = CONFIG["KNOWN_CATALOGS"][catalog_id]
 
         if handle_git_repos:
             # If Git repo, set output_dir appropriately
@@ -233,35 +225,34 @@ class CfdeClient():
 
         # If dir (must be BDBag at this point), archive
         if os.path.isdir(data_path):
-            new_data_path = bdbag_api.archive_bag(data_path, self.archive_format)
+            new_data_path = bdbag_api.archive_bag(data_path, CONFIG["ARCHIVE_FORMAT"])
             # If requested (e.g. Git repo copied dir), delete data dir
             if delete_dir:
                 shutil.rmtree(data_path)
             # Overwrite data_path - don't care about dir for uploading
             data_path = new_data_path
 
-        # Validate TableSchema in BDBag if requested
-        if validate_contents:
-            validation_res = ts_validate(data_path, catalog_id)
-            if not validation_res["is_valid"]:
-                return {
-                    "success": False,
-                    "error": ("TableSchema invalid due to the following errors: \n{}\n"
-                              .format(validation_res["error"]))
-                }
+        # Validate TableSchema in BDBag
+        validation_res = ts_validate(data_path, schema=schema)
+        if not validation_res["is_valid"]:
+            return {
+                "success": False,
+                "error": ("TableSchema invalid due to the following errors: \n{}\n"
+                          .format(validation_res["error"]))
+            }
 
         # Now BDBag is archived file
         # Set path on destination (FAIR RE EP)
-        fair_re_path = "/public/CFDE/metadata/{}".format(os.path.basename(data_path))
+        dest_path = "{}{}".format(CONFIG["EP_DIR"], os.path.basename(data_path))
 
         # Create Flow input
         # If a local EP exists, use Transfer Flow
         if self.local_endpoint:
-            flow_id = self.transfer_flow_id
+            flow_id = CONFIG["TRANSFER_FLOW"]
             flow_input = {
                 "source_endpoint_id": self.local_endpoint,
                 "source_path": data_path,
-                "fair_re_path": fair_re_path,
+                "fair_re_path": dest_path,
                 "is_directory": False,
                 "restore": False
             }
@@ -271,7 +262,7 @@ class CfdeClient():
         else:
             headers = {}
             self.__https_authorizer.set_authorization_header(headers)
-            data_url = "{}{}".format(self.fair_re_url, fair_re_path)
+            data_url = "{}{}".format(CONFIG["EP_URL"], dest_path)
 
             with open(data_path, 'rb') as bag_file:
                 bag_data = bag_file.read()
@@ -292,7 +283,7 @@ class CfdeClient():
                               .format(put_res.status_code, put_res.content))
                 }
 
-            flow_id = self.http_flow_id
+            flow_id = CONFIG["HTTP_FLOW"]
             flow_input = {
                 "data_url": data_url
             }
@@ -341,6 +332,7 @@ class CfdeClient():
                                                           flow_instance_id).data
 
         # Create user-friendly version of status message
+        STATE_MSGS = CONFIG["STATE_MSGS"]
         clean_status = "\nStatus of {} (instance {})\n".format(flow_def["title"], flow_instance_id)
         # Flow overall status
         clean_status += "This Flow {}.\n".format(STATE_MSGS[flow_status["status"]])
