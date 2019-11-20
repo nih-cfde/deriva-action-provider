@@ -483,9 +483,9 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
                        if os.path.isdir(os.path.join(bdbag_dir, dirname))][0]
         # Make full path to data dir
         bdbag_data = os.path.join(bdbag_dir, bdbag_inner, "data")
-        # Get schema file (assume exactly one JSON file)
+        # Get schema file (assume exactly one non-hidden JSON file)
         schema_file = [filename for filename in os.listdir(bdbag_data)
-                       if filename.endswith(".json")][0]
+                       if filename.endswith(".json") and not filename.startswith(".")][0]
         schema_file_path = os.path.join(bdbag_data, schema_file)
     except Exception as e:
         error_status = {
