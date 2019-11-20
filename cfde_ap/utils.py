@@ -495,6 +495,12 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
     if not catalog_id:
         datapack.provision()
     # datapack.apply_acls(acls)
+    # Apply custom config (if possible - may fail if non-canon schema)
+    try:
+        datapack.apply_custom_config()
+    # Using non-canon schema is not failure unless Deriva rejects data
+    except Exception:
+        pass
     datapack.load_data_files()
 
     return {
