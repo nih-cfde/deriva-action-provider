@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta, timezone
-# import json
 import logging
 import multiprocessing
 import os
@@ -26,7 +25,6 @@ app.config.from_mapping(**CONFIG)
 app.url_map.strict_slashes = False
 
 # Logging setup
-# logger = logging.getLogger("cfde_ap")
 logger = multiprocessing.get_logger()
 logger.setLevel(CONFIG["LOG_LEVEL"])
 logger.propagate = False
