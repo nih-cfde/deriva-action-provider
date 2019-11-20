@@ -39,9 +39,9 @@ def ts_validate(data_path, schema=None):
         # If 'data' dir present, search there instead
         if "data" in os.listdir(data_path):
             data_path = os.path.join(data_path, "data")
-        # Find .json file
+        # Find .json file (cannot be hidden)
         desc_file_list = [filename for filename in os.listdir(data_path)
-                          if filename.endswith(".json")]
+                          if filename.endswith(".json") and not filename.startswith(".")]
         if len(desc_file_list) < 1:
             return {
                 "is_valid": False,
@@ -258,6 +258,8 @@ class CfdeClient():
             }
             if catalog_id:
                 flow_input["catalog_id"] = str(catalog_id)
+            if server:
+                flow_input["server"] = server
         # Otherwise, we must PUT the BDBag on the FAIR RE EP
         else:
             headers = {}
@@ -289,6 +291,8 @@ class CfdeClient():
             }
             if catalog_id:
                 flow_input["catalog_id"] = str(catalog_id)
+            if server:
+                flow_input["server"] = server
 
         # Get Flow scope
         flow_def = self.flow_client.get_flow(flow_id)

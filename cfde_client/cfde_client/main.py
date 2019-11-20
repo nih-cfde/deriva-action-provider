@@ -6,6 +6,9 @@ import click
 from cfde_client import CfdeClient
 
 
+DEFAULT_STATE_FILE = os.path.expanduser("~/.cfde_client.json")
+
+
 @click.group()
 def cli():
     """Client to interact with the DERIVA Action Provider and associated Flows."""
@@ -14,15 +17,17 @@ def cli():
 
 @cli.command()
 @click.argument("data-path", nargs=1, type=click.Path(exists=True))
-@click.option("--catalog-id", default=None, show_default=True)
+@click.option("--catalog", default=None, show_default=True)
+@click.option("--schema", default=None, show_default=True)
 @click.option("--output-dir", default=None, show_default=True, type=click.Path(exists=False))
 @click.option("--delete-dir/--keep-dir", is_flag=True, default=False, show_default=True)
 @click.option("--ignore-git/--handle-git", is_flag=True, default=False, show_default=True)
-@click.option("--no-validate/--validate", is_flag=True, default=False, show_default=True)
-@click.option("--bag-kwargs-file", type=click.Path(exists=True), default=None)
-@click.option("--client-state-file", type=click.Path(exists=True), default=None)
-def run(data_path, catalog_id, output_dir, delete_dir, ignore_git, no_validate,
-        bag_kwargs_file, client_state_file):
+# TODO: Debug "hidden" missing parameter
+@click.option("--server", default=None)  # , hidden=True)
+@click.option("--bag-kwargs-file", type=click.Path(exists=True), default=None)  # , hidden=True)
+@click.option("--client-state-file", type=click.Path(exists=True), default=None)  # , hidden=True)
+def run(data_path, catalog, schema, output_dir, delete_dir, ignore_git,
+        server, bag_kwargs_file, client_state_file):
     """Start the Globus Automate Flow to ingest CFDE data into DERIVA."""
     if bag_kwargs_file:
         with open(bag_kwargs_file) as f:
@@ -30,15 +35,14 @@ def run(data_path, catalog_id, output_dir, delete_dir, ignore_git, no_validate,
     else:
         bag_kwargs = {}
     if not client_state_file:
-        client_state_file = os.path.expanduser("~/.cfde_client.json")
+        client_state_file = DEFAULT_STATE_FILE
 
     try:
         cfde = CfdeClient()
-        start_res = cfde.start_deriva_flow(data_path, catalog_id=catalog_id,
+        start_res = cfde.start_deriva_flow(data_path, catalog_id=catalog, schema=schema,
                                            output_dir=output_dir, delete_dir=delete_dir,
                                            handle_git_repos=(not ignore_git),
-                                           validate_contents=(not no_validate),
-                                           **bag_kwargs)
+                                           server=server, **bag_kwargs)
     except Exception as e:
         print("Error while starting Flow: {}".format(str(e)))
         return
@@ -52,14 +56,14 @@ def run(data_path, catalog_id, output_dir, delete_dir, ignore_git, no_validate,
 
 
 @cli.command()
-@click.option("--flow-id")
-@click.option("--flow-instance-id")
-@click.option("--client-state-file", type=click.Path(exists=True))
+@click.option("--flow-id", default=None, show_default=True)
+@click.option("--flow-instance-id", default=None, show_default=True)
+@click.option("--client-state-file", type=click.Path(exists=True), default=None)  # , hidden=True)
 def status(flow_id=None, flow_instance_id=None, client_state_file=None):
     """Check the status of a Flow."""
     if not flow_id or not flow_instance_id:
         if not client_state_file:
-            client_state_file = os.path.expanduser("~/.cfde_client.json")
+            client_state_file = DEFAULT_STATE_FILE
         try:
             with open(client_state_file) as f:
                 client_state = json.load(f)
