@@ -74,8 +74,19 @@ def ts_validate(data_path, schema=None):
             "error": str(e)
         }
 
-    # TODO: Pull schema from existing catalog, validate against that too
     if schema:
+        # Download reference schema
+        schema_path = os.path.join(os.path.dirname(data_path), "validation_schema.json")
+        try:
+            with open(schema_path, "wb") as f:
+                f.write(requests.get(schema).content)
+        except Exception as e:
+            return {
+                "is_valid": False,
+                "raw_errors": [e],
+                "error": "Error while downloading schema: {}".format(str(e))
+            }
+        # TODO: Validate against downloaded schema
         print("Warning: Currently unable to validate data against existing schema '{}'."
               .format(schema))
 
@@ -125,7 +136,8 @@ class CfdeClient():
         self.last_flow_run = {}
 
     def start_deriva_flow(self, data_path, catalog_id=None, schema=None, server=None,
-                          output_dir=None, delete_dir=False, handle_git_repos=True, **kwargs):
+                          output_dir=None, delete_dir=False, handle_git_repos=True,
+                          dry_run=False, **kwargs):
         """Start the Globus Automate Flow to ingest CFDE data into DERIVA.
 
         Arguments:
@@ -155,6 +167,10 @@ class CfdeClient():
                     When this is False, Git repositories are handled as simple directories
                     instead of Git repositories.
                     Default True.
+            dry_run (bool): Should the data be validated and bagged without starting the Flow?
+                    When True, does not ingest into DERIVA or start the Globus Automate Flow,
+                    and the return value will not have valid DERIVA Flow information.
+                    Default False.
 
         Keyword arguments are passed directly to the ``make_bag()`` function of the
         BDBag API (see https://github.com/fair-research/bdbag for details).
@@ -244,6 +260,13 @@ class CfdeClient():
         # Now BDBag is archived file
         # Set path on destination (FAIR RE EP)
         dest_path = "{}{}".format(CONFIG["EP_DIR"], os.path.basename(data_path))
+
+        # If doing dry run, stop here before making Flow input
+        if dry_run:
+            return {
+                "success": True,
+                "message": "Dry run completed successfully. No data was transferred."
+            }
 
         # Create Flow input
         # If a local EP exists, use Transfer Flow
