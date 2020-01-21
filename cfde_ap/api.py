@@ -503,7 +503,7 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
     # Ingest into Deriva
     logger.debug(f"{action_id}: Ingesting into Deriva")
     try:
-        servername = CONFIG["DERIVA_SERVER_NAME"]
+        servername = CONFIG["DEFAULT_SERVER_NAME"]
         # TODO: Determine schema name from data
         schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
 
