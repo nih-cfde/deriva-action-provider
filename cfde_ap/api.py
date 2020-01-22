@@ -543,7 +543,7 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
             "deriva_id": catalog_id,
             # "number_ingested": insert_count,
             "deriva_link": (f"https://{servername}/chaise/recordset/"
-                            f"#{catalog_id}/{schema_name}:Dataset"),
+                            f"#{catalog_id}/{schema_name}:dataset"),
             "message": "DERIVA ingest successful"
         }
     }
