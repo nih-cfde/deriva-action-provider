@@ -473,8 +473,8 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
         data_json_file (str): The path to the JSON file with TableSchema data.
         catalog_id (str): If updating an existing catalog, the existing catalog ID.
                 Default None, to create a new catalog.
-        acls (dict): The ACLs to set on the catalog. Currently nonfunctional.
-                Default None.
+        acls (dict): The ACLs to set on the catalog.
+                Default None to use default ACLs.
 
     Returns:
         dict: The result of the ingest.
@@ -494,13 +494,31 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
     datapack.set_catalog(catalog)
     if not catalog_id:
         datapack.provision()
-    # datapack.apply_acls(acls)
+
     # Apply custom config (if possible - may fail if non-canon schema)
     try:
         datapack.apply_custom_config()
     # Using non-canon schema is not failure unless Deriva rejects data
     except Exception:
-        pass
+        logger.info("Custom config skipped")
+    # Apply ACLs - either supplied or CfdeDataPackage default
+    # Defaults are set in .apply_custom_config(), which can fail
+    if acls is None:
+        acls = dict(CfdeDataPackage.catalog_acls)
+    # Ensure catalog owner still in ACLs - DERIVA forbids otherwise
+    acls['owner'] = list(set(acls['owner']).union(datapack.cat_model_root.acls['owner']))
+    # Apply acls
+    datapack.cat_model_root.acls.update(acls)
+    # Set ERMrest access
+    datapack.cat_model_root.table('public', 'ERMrest_Client').acls\
+            .update(datapack.ermrestclient_acls)
+    datapack.cat_model_root.table('public', 'ERMrest_Group').acls\
+            .update(datapack.ermrestclient_acls)
+    # Submit changes to server
+    datapack.cat_model_root.apply()
+
+    # Load data from files into DERIVA
+    # This is the step that will fail if the data are incorrect
     datapack.load_data_files()
 
     return {
