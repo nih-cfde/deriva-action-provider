@@ -6,7 +6,7 @@ This is a client to interact with the Globus Automate Flows for CFDE use cases. 
 
 ```
 git clone https://github.com/fair-research/deriva-action-provider.git
-cd deriva-action-provider
+cd deriva-action-provider/cfde_client
 pip install -e .
 ```
 
