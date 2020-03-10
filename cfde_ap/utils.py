@@ -525,3 +525,40 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
         "success": True,
         "catalog_id": catalog.catalog_id
     }
+
+
+def deriva_modify(servername, catalog_id, acls=None):
+    """Modify a DERIVA catalog's options using the CfdeDataPackage.
+    Currently limited to ACL changes only.
+
+    Arguments:
+        servername (str): The name of the DERIVA server
+        catalog_id (str): The ID of the catalog to change. The catalog must exist.
+        acls (dict): The Access Control Lists to set.
+
+    Returns:
+        dict: The results of the update.
+            success (bool): True if the ACLs were successfully changed.
+    """
+    # Format credentials in DerivaServer-expected format
+    creds = {
+        "bearer-token": get_deriva_token()
+    }
+    # Get the catalog model object to modify
+    server = DerivaServer("https", servername, creds)
+    catalog = server.connect_ermrest(catalog_id)
+    cat_model = catalog.getCatalogModel()
+
+    # If modifying ACL, set ACL
+    if acls:
+        # Ensure catalog owner still in ACLs - DERIVA forbids otherwise
+        acls['owner'] = list(set(acls['owner']).union(cat_model.acls['owner']))
+        # Apply acls
+        cat_model.acls.update(acls)
+
+    # Submit changes to server
+    cat_model.apply()
+
+    return {
+        "success": True
+    }

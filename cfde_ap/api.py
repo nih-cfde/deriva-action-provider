@@ -130,6 +130,16 @@ def run():
         # Raise just the first line of the exception text, which contains the error
         # The entire body and schema are in the exception, which are too verbose
         raise err.InvalidRequest(str(e).split("\n")[0])
+    # Must have data_url if ingest or restore
+    if body["operation"] in ["ingest", "restore"] and not body.get("data_url"):
+        raise err.InvalidRequest("You must provide a data_url to ingest or restore.")
+    # Must have catalog_id to modify and content to change (currently only ACL)
+    elif body["operation"] == "modify":
+        if not body.get("catalog_id"):
+            raise err.InvalidRequest("You must specify the catalog_id to modify.")
+        elif not body.get("catalog_acls"):
+            raise err.InvalidRequest("You must specify content in the catalog to modify. "
+                                     "(Currently only catalog_acls qualifies.)")
     # If request_id has been submitted before, return status instead of starting new
     try:
         status = utils.read_action_by_request(TBL, req["request_id"])
@@ -231,10 +241,6 @@ def release(action_id):
 #######################################
 
 def start_action(action_id, action_data):
-    # Transform input from Automate, if Transferred before ingesting
-    if action_data.get("fair_re_path"):
-        action_data["data_url"] = CONFIG["FAIR_RE_URL"] + action_data.pop("fair_re_path")
-
     # Process keyword catalog ID
     if action_data.get("catalog_id") in CONFIG["KNOWN_CATALOGS"].keys():
         catalog_info = CONFIG["KNOWN_CATALOGS"][action_data["catalog_id"]]
@@ -249,7 +255,7 @@ def start_action(action_id, action_data):
     # TODO: Process management
     #       Currently assuming process manages itself
     # Restore Action
-    if action_data.get("restore"):
+    if action_data["operation"] == "restore":
         logger.info(f"{action_id}: Starting Deriva restore into "
                     f"{action_data.get('catalog_id', 'new catalog')}")
         # Spawn new process
@@ -258,7 +264,7 @@ def start_action(action_id, action_data):
         driver = multiprocessing.Process(target=action_restore, args=args, name=action_id)
         driver.start()
     # Ingest Action
-    else:
+    elif action_data["operation"] == "ingest":
         logger.info(f"{action_id}: Starting Deriva ingest into "
                     f"{action_data.get('catalog_id', 'new catalog')}")
         # Spawn new process
@@ -266,6 +272,16 @@ def start_action(action_id, action_data):
                 action_data.get("catalog_id"), action_data.get("catalog_acls"))
         driver = multiprocessing.Process(target=action_ingest, args=args, name=action_id)
         driver.start()
+    elif action_data["operation"] == "modify":
+        logger.info(f"{action_id}: Starting Deriva modification of "
+                    f"{action_data['catalog_id']}")
+        # Spawn new process
+        args = (action_id, action_data["catalog_id"], action_data.get("server"),
+                action_data.get("catalog_acls"))
+        driver = multiprocessing.Process(target=action_modify, args=args, name=action_id)
+        driver.start()
+    else:
+        raise err.InvalidRequest("Operation '{}' unknown".format(action_data["operation"]))
     return
 
 
@@ -503,7 +519,6 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
     # Ingest into Deriva
     logger.debug(f"{action_id}: Ingesting into Deriva")
     try:
-        servername = CONFIG["DEFAULT_SERVER_NAME"]
         # TODO: Determine schema name from data
         schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
 
@@ -545,6 +560,68 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
             "deriva_link": (f"https://{servername}/chaise/recordset/"
                             f"#{catalog_id}/{schema_name}:dataset"),
             "message": "DERIVA ingest successful"
+        }
+    }
+    try:
+        utils.update_action_status(TBL, action_id, status)
+    except Exception as e:
+        with open("ERROR.log", 'w') as out:
+            out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
+                      f"After success on ID '{catalog_id}'")
+    return
+
+
+def action_modify(action_id, catalog_id, servername=None, acls=None):
+    # Modify the parameters of an existing catalog
+    # Excessive try-except blocks because there's (currently) no process management;
+    # if the action fails, it needs to always self-report failure
+    # Argument acls defaults to None to allow different parameters later on
+
+    if not servername:
+        servername = CONFIG["DEFAULT_SERVER_NAME"]
+
+    logger.debug(f"{action_id}: Deriva modify process started for {catalog_id}")
+
+    # Modify Deriva catalog
+    try:
+        # TODO: Determine schema name from catalog
+        schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
+
+        modify_res = utils.deriva_modify(servername, catalog_id, acls=acls)
+        if not modify_res["success"]:
+            error_status = {
+                "status": "FAILED",
+                "details": {
+                    "error": f"Unable to modify catalog {catalog_id}: {modify_res.get('error')}"
+                }
+            }
+            utils.update_action_status(TBL, action_id, error_status)
+            return
+    except Exception as e:
+        error_status = {
+            "status": "FAILED",
+            "details": {
+                "error": f"Error modifying DERIVA catalog {catalog_id}: {str(e)}"
+            }
+        }
+        logger.error(f"{action_id}: Error modifying catalog {catalog_id}: {repr(e)}")
+        try:
+            utils.update_action_status(TBL, action_id, error_status)
+        except Exception as e2:
+            with open("ERROR.log", 'w') as out:
+                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
+                          f"After error '{repr(e)}'")
+        return
+
+    # Successful ingest
+    logger.debug(f"{action_id}: Catalog {catalog_id} updated")
+    status = {
+        "status": "SUCCEEDED",
+        "details": {
+            "deriva_id": catalog_id,
+            "deriva_link": (f"https://{servername}/chaise/recordset/"
+                            f"#{catalog_id}/{schema_name}:dataset"),
+            "message": "DERIVA catalog modification successful"
         }
     }
     try:
