@@ -11,7 +11,7 @@ BASE_CONFIG = {
     "GLOBUS_AUD": "cfde_ap_demo",
     "GLOBUS_GROUP": "a437abe3-c9a4-11e9-b441-0efb3ba9a670",
     "DATA_DIR": os.path.join(os.path.expanduser("~"), "deriva_data"),
-    "DERIVA_SERVER_NAME": "demo.derivacloud.org",
+    "DEFAULT_SERVER_NAME": "demo.derivacloud.org",
     "DERIVA_SCHEMA_NAME": "CFDE",
     "FAIR_RE_URL": "https://317ec.36fe.dn.glob.us",
     "TRANSFER_PING_INTERVAL": 60,  # Seconds

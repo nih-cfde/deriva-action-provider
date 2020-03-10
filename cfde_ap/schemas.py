@@ -23,10 +23,16 @@ INPUT_SCHEMA = {
                             "must point to a DERIVA backup. When false, data_url must point "
                             "to a BDBag of TableSchema data. The default is false.")
         },
+        "server": {
+            "type": "string",
+            "description": ("The DERIVA server to ingest into. By default, will use the DERIVA "
+                            "demo server.")
+        },
         "catalog_id": {
             "type": "string",
-            "description": ("The existing catalog ID to ingest into. To create a new catalog, "
-                            "do not specify this value. If specified, the catalog must exist.")
+            "description": ("The existing catalog ID to ingest into, or the name of a pre-defined "
+                            "catalog (e.g. 'prod'). To create a new catalog, do not specify "
+                            "this value. If specified, the catalog must exist.")
         },
         "catalog_acls": {
             "type": "object",
