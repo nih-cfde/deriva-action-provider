@@ -116,6 +116,9 @@ class CfdeClient():
             force (bool): Force a login flow, even if loaded tokens are valid.
                     Same effect as ``clear_old_tokens``. If one of these is ``True``, the effect
                     triggers. **Default**: ``False``.
+            service_instance (str): The instance of the Globus Automate Flow
+                    and/or the DERIVA ingest Action Provider to use. Unless directed otherwise,
+                    this should be left to the default. **Default**: ``prod``.
         """
         self.__native_client = NativeClient(client_id=self.client_id, app_name=self.app_name)
         self.__native_client.login(requested_scopes=CONFIG["ALL_SCOPES"],
@@ -132,8 +135,27 @@ class CfdeClient():
                                                     app_name=self.app_name,
                                                     base_url="https://flows.automate.globus.org",
                                                     authorizer=automate_authorizer)
-        self.local_endpoint = globus_sdk.LocalGlobusConnectPersonal().endpoint_id
         self.last_flow_run = {}
+        # Fetch dynamic config info
+        try:
+            dconf_res = requests.get(CONFIG["DYNAMIC_CONFIG_LINK"])
+            if dconf_res.status_code >= 300:
+                raise ValueError("Unable to download required configuration: Error {}: {}"
+                                 .format(dconf_res.status_code, dconf_res.content))
+            dconf = dconf_res.json()
+            self.catalogs = dconf["CATALOGS"]
+            self.flows = dconf["FLOWS"]
+        except Exception:
+            # TODO: Should there be any better error-handling here, or is the exception acceptable?
+            raise
+        self.service_instance = kwargs.get("service_instance", "prod")
+        # Verify service instance is valid
+        if self.service_instance not in self.catalogs.keys():
+            raise ValueError("Catalog configuration for service_instance '{}' not found"
+                             .format(self.service_instance))
+        elif self.service_instance not in self.flows.keys():
+            raise ValueError("Flow configuration for service_instance '{}' not found"
+                             .format(self.service_instance))
 
     def start_deriva_flow(self, data_path, catalog_id=None, schema=None, server=None,
                           output_dir=None, delete_dir=False, handle_git_repos=True,
@@ -179,12 +201,12 @@ class CfdeClient():
         if not os.path.exists(data_path):
             raise FileNotFoundError("Path '{}' does not exist".format(data_path))
 
-        if catalog_id in CONFIG["KNOWN_CATALOGS"]:
+        if catalog_id in self.catalogs.keys():
             if schema:
                 raise ValueError("You may not specify a schema ('{}') when ingesting to "
                                  "a named catalog ('{}'). Retry without specifying "
                                  "a schema.".format(schema, catalog_id))
-            schema = CONFIG["KNOWN_CATALOGS"][catalog_id]
+            schema = self.catalogs[catalog_id]
 
         if handle_git_repos:
             # If Git repo, set output_dir appropriately
@@ -265,19 +287,22 @@ class CfdeClient():
         if dry_run:
             return {
                 "success": True,
-                "message": "Dry run completed successfully. No data was transferred."
+                "message": "Dry run validated successfully. No data was transferred."
             }
 
-        # Create Flow input
-        # If a local EP exists, use Transfer Flow
-        if self.local_endpoint:
-            flow_id = CONFIG["TRANSFER_FLOW"]
+        # Set up Flow
+        # If local EP exists, can use Transfer
+        # Local EP fetched now in case GCP started after Client creation
+        local_endpoint = globus_sdk.LocalGlobusConnectPersonal().endpoint_id
+        if local_endpoint:
+            # Populate Transfer fields in Flow
+            flow_id = self.flows[self.service_instance]
             flow_input = {
-                "source_endpoint_id": self.local_endpoint,
+                "source_endpoint_id": local_endpoint,
                 "source_path": data_path,
                 "fair_re_path": dest_path,
                 "is_directory": False,
-                "restore": False
+                "operation": "ingest"
             }
             if catalog_id:
                 flow_input["catalog_id"] = str(catalog_id)
@@ -308,9 +333,10 @@ class CfdeClient():
                               .format(put_res.status_code, put_res.content))
                 }
 
-            flow_id = CONFIG["HTTP_FLOW"]
+            flow_id = self.flows[self.service_instance]
             flow_input = {
-                "data_url": data_url
+                "data_url": data_url,
+                "operation": "ingest"
             }
             if catalog_id:
                 flow_input["catalog_id"] = str(catalog_id)

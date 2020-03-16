@@ -2,6 +2,11 @@ import globus_automate_client
 
 
 CONFIG = {
+    # File with dynamic config information in JSON
+    # Contains:
+    #   CATALOGS (dict): keyword: catalog_name
+    #   FLOWS (dict): keyword: flow_id
+    "DYNAMIC_CONFIG_LINK": "",
     # Translations for Automate states into nicer language
     "STATE_MSGS": {
         "ACTIVE": "is still in progress",
@@ -9,18 +14,9 @@ CONFIG = {
         "SUCCEEDED": "has completed successfully",
         "FAILED": "has failed"
     },
-    # Translations for known catalogs into schemas
-    "KNOWN_CATALOGS": {
-        "demo": "demo",
-        "prod": "prod",
-        "stage": "stage",
-        "dev": "dev"
-    },
-    # Automate Scopes and Flows
+    # Automate Scopes
     "HTTPS_SCOPE": "https://auth.globus.org/scopes/0e57d793-f1ac-4eeb-a30f-643b082d68ec/https",
     "AUTOMATE_SCOPES": list(globus_automate_client.flows_client.ALL_FLOW_SCOPES),
-    "TRANSFER_FLOW": "b1e13f5e-dad6-4524-8c3f-fb39e752a266",
-    "HTTP_FLOW": "056c26d7-3bf4-4022-8b4d-029875b5e8c0",
     # FAIR Research Endpoint destination directory and HTTPS URL
     "EP_DIR": "/public/CFDE/metadata/",
     "EP_URL": "https://317ec.36fe.dn.glob.us",
