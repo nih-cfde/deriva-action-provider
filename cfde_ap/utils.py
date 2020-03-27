@@ -1,5 +1,4 @@
 from copy import deepcopy
-# import csv
 import logging
 import os
 import shutil
@@ -8,15 +7,13 @@ import urllib
 import boto3
 from boto3.dynamodb.conditions import Attr
 import bson  # For IDs
-from deriva.core import DerivaServer  # , ErmrestCatalog
-# from deriva.core.ermrest_model import builtin_types, Table, Column, Key, ForeignKey
+from deriva.core import DerivaServer
 import globus_sdk
 import mdf_toolbox
 import requests
 
 from cfde_ap import CONFIG
 from . import error as err
-# from .cfde_datapackage import CfdeDataPackage
 from cfde_deriva.datapackage import CfdeDataPackage
 
 
@@ -26,9 +23,7 @@ DMO_CLIENT = boto3.resource('dynamodb',
                             aws_access_key_id=CONFIG["AWS_KEY"],
                             aws_secret_access_key=CONFIG["AWS_SECRET"],
                             region_name="us-east-1")
-# DMO_TABLE = "cfde-demo-status"
 DMO_SCHEMA = {
-    # "TableName": DMO_TABLE,
     "AttributeDefinitions": [{
         "AttributeName": "action_id",
         "AttributeType": "S"
@@ -478,8 +473,8 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
         data_json_file (str): The path to the JSON file with TableSchema data.
         catalog_id (str): If updating an existing catalog, the existing catalog ID.
                 Default None, to create a new catalog.
-        acls (dict): The ACLs to set on the catalog. Currently nonfunctional.
-                Default None.
+        acls (dict): The ACLs to set on the catalog.
+                Default None to use default ACLs.
 
     Returns:
         dict: The result of the ingest.
@@ -499,7 +494,31 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
     datapack.set_catalog(catalog)
     if not catalog_id:
         datapack.provision()
-    # datapack.apply_acls(acls)
+
+    # Apply custom config (if possible - may fail if non-canon schema)
+    try:
+        datapack.apply_custom_config()
+    # Using non-canon schema is not failure unless Deriva rejects data
+    except Exception:
+        logger.info("Custom config skipped")
+    # Apply ACLs - either supplied or CfdeDataPackage default
+    # Defaults are set in .apply_custom_config(), which can fail
+    if acls is None:
+        acls = dict(CfdeDataPackage.catalog_acls)
+    # Ensure catalog owner still in ACLs - DERIVA forbids otherwise
+    acls['owner'] = list(set(acls['owner']).union(datapack.cat_model_root.acls['owner']))
+    # Apply acls
+    datapack.cat_model_root.acls.update(acls)
+    # Set ERMrest access
+    datapack.cat_model_root.table('public', 'ERMrest_Client').acls\
+            .update(datapack.ermrestclient_acls)
+    datapack.cat_model_root.table('public', 'ERMrest_Group').acls\
+            .update(datapack.ermrestclient_acls)
+    # Submit changes to server
+    datapack.cat_model_root.apply()
+
+    # Load data from files into DERIVA
+    # This is the step that will fail if the data are incorrect
     datapack.load_data_files()
 
     return {
@@ -508,195 +527,38 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
     }
 
 
-'''
-# Old Deriva input functions
-def create_deriva_catalog(servername, ermrest_schema, acls):
-    """Create catalog on server with given schema and set ACLs.
+def deriva_modify(servername, catalog_id, acls=None):
+    """Modify a DERIVA catalog's options using the CfdeDataPackage.
+    Currently limited to ACL changes only.
 
     Arguments:
-        servername (str): The server hostname. Only HTTPS servers are supported.
-        ermrest_schema (dict): The ERMrest schema the catalog shoudl have.
-        acls (dict of lists of str): The ACLs to set on the catalog.
+        servername (str): The name of the DERIVA server
+        catalog_id (str): The ID of the catalog to change. The catalog must exist.
+        acls (dict): The Access Control Lists to set.
 
     Returns:
-        int: The catalog ID.
+        dict: The results of the update.
+            success (bool): True if the ACLs were successfully changed.
     """
     # Format credentials in DerivaServer-expected format
     creds = {
         "bearer-token": get_deriva_token()
     }
+    # Get the catalog model object to modify
     server = DerivaServer("https", servername, creds)
-    catalog = server.create_ermrest_catalog()
-    catalog.post("/schema", json=ermrest_schema).raise_for_status()
-    model = catalog.getCatalogModel()
-    model.acls.update(acls)
+    catalog = server.connect_ermrest(catalog_id)
+    cat_model = catalog.getCatalogModel()
 
-    # TODO: Other config? (Chaise display params, etc.)
+    # If modifying ACL, set ACL
+    if acls:
+        # Ensure catalog owner still in ACLs - DERIVA forbids otherwise
+        acls['owner'] = list(set(acls['owner']).union(cat_model.acls['owner']))
+        # Apply acls
+        cat_model.acls.update(acls)
 
-    model.apply(catalog)
-
-    return catalog.catalog_id
-
-
-def insert_deriva_data(servername, catalog, schema_name, table_name, data):
-    """Insert data into DERIVA.
-
-    Arguments:
-        servername (str): The name of the DERIVA server.
-        catalog (str): The catalog ID.
-        schema_name (str): The name of the schema being inserted.
-        table_name (str): The name of the table being inserted into.
-        data (list): The data to insert.
-
-    Returns:
-        #TODO
-    """
-    if type(schema_name) is not str:
-        raise TypeError("schema_name must be a string")
-    elif type(table_name) is not str:
-        raise TypeError("table_name must be a string")
-
-    # Format credentials in DerivaServer-expected format
-    creds = {
-        "bearer-token": get_deriva_token()
-    }
-    catalog = ErmrestCatalog("https", servername, catalog, credentials=creds)
-    pb = catalog.getPathBuilder()  # noqa: F841 (pb unused - it's used, but in an eval())
-    # Using eval() because DataPaths are dot-notated in DERIVA
-    # Sanitize schema_name and table_name first.
-    # It is not expected that malicious payloads will be loaded here,
-    # but it's better to have some low level of protection at least.
-    remove_list = [" ", "\n", "\t", ".", "(", ")"]
-    for char in remove_list:
-        schema_name = schema_name.replace(char, "")
-        table_name = table_name.replace(char, "")
-    table = eval(f"pb.{schema_name}.{table_name}")
-
-    try:
-        res = table.insert(data)
-    except Exception:
-        # TODO: Error handling
-        raise
+    # Submit changes to server
+    cat_model.apply()
 
     return {
-        "success": True,
-        "num_inserted": len(res),
-        "uri": res.uri
+        "success": True
     }
-
-
-def convert_tabular(path):
-    """Read a tabular data file and return OrderedDict results.
-
-    Arguments:
-        path (str): The path to the data file.
-
-    Returns:
-        list of OrderedDict: The data.
-    """
-    dialect = "excel-tab" if path.endswith(".tsv") else "excel"
-    with open(path, newline='') as f:
-        return [row for row in csv.DictReader(f, dialect=dialect)]
-'''
-'''
-# Old convert_tableschema
-def convert_tableschema(tableschema, schema_name):
-    """Convert a TableSchema into ERMRest for a DERIVA catalog."""
-    resources = tableschema["resources"]
-    return {
-        "schemas": {
-            schema_name: {
-                "schema_name": schema_name,
-                "tables": {
-                    tdef["name"]: make_table(tdef, schema_name)
-                    for tdef in resources
-                }
-            }
-        }
-    }
-
-
-def make_table(tdef, schema_name, provide_system=True):
-    tname = tdef["name"]
-    tdef = tdef["schema"]
-    keys = []
-    keysets = set()
-    pk = tdef.get("primaryKey")
-    if isinstance(pk, str):
-        pk = [pk]
-    if isinstance(pk, list):
-        keys.append(make_key(tname, pk, schema_name))
-        keysets.add(frozenset(pk))
-    return Table.define(
-        tname,
-        column_defs=[
-            make_column(cdef)
-            for cdef in tdef.get("fields", [])
-        ],
-        key_defs=([make_key(tname, pk, schema_name)] if pk else []) + [
-            make_key(tname, [cdef["name"]], schema_name)
-            for cdef in tdef.get("fields", [])
-            if cdef.get("constraints", {}).get("unique", False)
-            and frozenset([cdef["name"]]) not in keysets
-        ],
-        fkey_defs=[
-            make_fkey(tname, fkdef, schema_name)
-            for fkdef in tdef.get("foreignKeys", [])
-        ],
-        comment=tdef.get("description"),
-        provide_system=provide_system
-    )
-
-
-def make_type(col_type):
-    """Choose appropriate ERMrest column types..."""
-    if col_type == "string":
-        return builtin_types.text
-    elif col_type == "datetime":
-        return builtin_types.timestamptz
-    elif col_type == "date":
-        return builtin_types.date
-    elif col_type == "integer":
-        return builtin_types.int8
-    elif col_type == "number":
-        return builtin_types.float8
-    elif col_type == "list":
-        # assume a list is a list of strings for now...
-        return builtin_types["text[]"]
-    else:
-        raise ValueError("Mapping undefined for type '{}'".format(col_type))
-
-
-def make_column(cdef):
-    constraints = cdef.get("constraints", {})
-    return Column.define(
-        cdef["name"],
-        make_type(cdef.get("type", "string")),
-        nullok=(not constraints.get("required", False)),
-        comment=cdef.get("description"),
-    )
-
-
-def make_key(tname, cols, schema_name):
-    return Key.define(
-        cols,
-        constraint_names=[[schema_name, "{}_{}_key".format(tname, "_".join(cols))]],
-    )
-
-
-def make_fkey(tname, fkdef, schema_name):
-    fkcols = fkdef["fields"]
-    fkcols = [fkcols] if isinstance(fkcols, str) else fkcols
-    reference = fkdef["reference"]
-    pktable = reference["resource"]
-    pktable = tname if pktable == "" else pktable
-    pkcols = reference["fields"]
-    pkcols = [pkcols] if isinstance(pkcols, str) else pkcols
-    return ForeignKey.define(
-        fkcols,
-        schema_name,
-        pktable,
-        pkcols,
-        constraint_names=[[schema_name, "{}_{}_fkey".format(tname, "_".join(fkcols))]],
-    )
-'''

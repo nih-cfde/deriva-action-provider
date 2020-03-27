@@ -9,8 +9,9 @@ INPUT_SCHEMA = {
         "data_url": {
             "type": "string",
             "format": "uri",
-            "description": "The URL to the data for DERIVA ingest."
+            "description": "The URL or path to the data for DERIVA ingest."
         },
+        '''
         "fair_re_path": {
             "type": "string",
             "description": ("Path on the FAIR Research Examples endpoint, to support "
@@ -23,10 +24,29 @@ INPUT_SCHEMA = {
                             "must point to a DERIVA backup. When false, data_url must point "
                             "to a BDBag of TableSchema data. The default is false.")
         },
+        '''
+        "operation": {
+            "type": "string",
+            "description": ("The operation to perform on the data. If the data is a DERIVA backup "
+                            "to restore, use 'restore'. If the data is TableSchema to ingest into "
+                            "a new or existing DERIVA catalog, use 'ingest'. If you are only "
+                            "modifying the parameters of one catalog, use 'modify'."),
+            "enum": [
+                "restore",
+                "ingest",
+                "modify"
+            ]
+        },
+        "server": {
+            "type": "string",
+            "description": ("The DERIVA server to ingest into. By default, will use the DERIVA "
+                            "demo server.")
+        },
         "catalog_id": {
             "type": "string",
-            "description": ("The existing catalog ID to ingest into. To create a new catalog, "
-                            "do not specify this value. If specified, the catalog must exist.")
+            "description": ("The existing catalog ID to ingest into, or the name of a pre-defined "
+                            "catalog (e.g. 'prod'). To create a new catalog, do not specify "
+                            "this value. If specified, the catalog must exist.")
         },
         "catalog_acls": {
             "type": "object",
@@ -85,10 +105,7 @@ INPUT_SCHEMA = {
             }
         }
     },
-    "oneOf": [
-        {"required": ["data_url"]},
-        {"required": ["fair_re_path"]}
-    ]
+    "required": ["operation"]
 }
 
 # TODO

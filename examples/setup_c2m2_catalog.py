@@ -63,7 +63,7 @@ dp.load_data_files()
 
 print("All data packages loaded.")
 
-print("Try visiting 'https://%s/chaise/recordset/#%s/CFDE:Dataset'" % (
+print("Try visiting 'https://%s/chaise/recordset/#%s/CFDE:dataset'" % (
     servername,
     catalog.catalog_id,
 ))

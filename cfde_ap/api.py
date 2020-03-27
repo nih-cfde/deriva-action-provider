@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta, timezone
-# import json
 import logging
 import multiprocessing
 import os
@@ -26,7 +25,6 @@ app.config.from_mapping(**CONFIG)
 app.url_map.strict_slashes = False
 
 # Logging setup
-# logger = logging.getLogger("cfde_ap")
 logger = multiprocessing.get_logger()
 logger.setLevel(CONFIG["LOG_LEVEL"])
 logger.propagate = False
@@ -132,6 +130,16 @@ def run():
         # Raise just the first line of the exception text, which contains the error
         # The entire body and schema are in the exception, which are too verbose
         raise err.InvalidRequest(str(e).split("\n")[0])
+    # Must have data_url if ingest or restore
+    if body["operation"] in ["ingest", "restore"] and not body.get("data_url"):
+        raise err.InvalidRequest("You must provide a data_url to ingest or restore.")
+    # Must have catalog_id to modify and content to change (currently only ACL)
+    elif body["operation"] == "modify":
+        if not body.get("catalog_id"):
+            raise err.InvalidRequest("You must specify the catalog_id to modify.")
+        elif not body.get("catalog_acls"):
+            raise err.InvalidRequest("You must specify content in the catalog to modify. "
+                                     "(Currently only catalog_acls qualifies.)")
     # If request_id has been submitted before, return status instead of starting new
     try:
         status = utils.read_action_by_request(TBL, req["request_id"])
@@ -233,29 +241,47 @@ def release(action_id):
 #######################################
 
 def start_action(action_id, action_data):
-    # Transform input from Automate, if Transferred before ingesting
-    if action_data.get("fair_re_path"):
-        action_data["data_url"] = CONFIG["FAIR_RE_URL"] + action_data.pop("fair_re_path")
+    # Process keyword catalog ID
+    if action_data.get("catalog_id") in CONFIG["KNOWN_CATALOGS"].keys():
+        catalog_info = CONFIG["KNOWN_CATALOGS"][action_data["catalog_id"]]
+        action_data["catalog_id"] = catalog_info["catalog_id"]
+        # Server must either not be provided, or must match catalog_info exactly
+        if not action_data.get("server"):
+            action_data["server"] = catalog_info["server"]
+        elif action_data["server"] != catalog_info["server"]:
+            raise ValueError(f"Server '{action_data['server']}' does not match server for "
+                             f"catalog '{action_data['catalog_id']}' ({catalog_info['server']})")
 
+    # TODO: Process management
+    #       Currently assuming process manages itself
     # Restore Action
-    if action_data.get("restore"):
+    if action_data["operation"] == "restore":
         logger.info(f"{action_id}: Starting Deriva restore into "
                     f"{action_data.get('catalog_id', 'new catalog')}")
         # Spawn new process
-        # TODO: Process management
-        #       Currently assuming process manages itself
-        args = (action_id, action_data["data_url"], action_data.get("catalog_id"))
+        args = (action_id, action_data["data_url"], action_data.get("server"),
+                action_data.get("catalog_id"))
         driver = multiprocessing.Process(target=action_restore, args=args, name=action_id)
         driver.start()
     # Ingest Action
-    else:
+    elif action_data["operation"] == "ingest":
         logger.info(f"{action_id}: Starting Deriva ingest into "
                     f"{action_data.get('catalog_id', 'new catalog')}")
         # Spawn new process
-        args = (action_id, action_data["data_url"], action_data.get("catalog_id"),
-                action_data.get("catalog_acls"))
+        args = (action_id, action_data["data_url"], action_data.get("server"),
+                action_data.get("catalog_id"), action_data.get("catalog_acls"))
         driver = multiprocessing.Process(target=action_ingest, args=args, name=action_id)
         driver.start()
+    elif action_data["operation"] == "modify":
+        logger.info(f"{action_id}: Starting Deriva modification of "
+                    f"{action_data['catalog_id']}")
+        # Spawn new process
+        args = (action_id, action_data["catalog_id"], action_data.get("server"),
+                action_data.get("catalog_acls"))
+        driver = multiprocessing.Process(target=action_modify, args=args, name=action_id)
+        driver.start()
+    else:
+        raise err.InvalidRequest("Operation '{}' unknown".format(action_data["operation"]))
     return
 
 
@@ -270,8 +296,10 @@ def cancel_action(action_id):
 # Asynchronous actions
 #######################################
 
-def action_restore(action_id, url, catalog=None):
+def action_restore(action_id, url, server=None, catalog=None):
     token = utils.get_deriva_token()
+    if not server:
+        server = CONFIG["DEFAULT_SERVER_NAME"]
 
     # Download backup zip file
     # TODO: Determine file type
@@ -337,7 +365,7 @@ def action_restore(action_id, url, catalog=None):
                 catalog
             ])
         restore_args.extend([
-            "demo.derivacloud.org",
+            server,
             file_path
         ])
         restore_res = subprocess.run(restore_args, capture_output=True)
@@ -365,7 +393,7 @@ def action_restore(action_id, url, catalog=None):
         deriva_link = (restore_message.split(b"Restore of catalog")[-1]
                                       .split(b"completed successfully")[0].strip())
         deriva_id = int(deriva_link.split(b"/")[-1])
-        deriva_samples = f"https://demo.derivacloud.org/chaise/recordset/#{deriva_id}/demo:Samples"
+        deriva_samples = f"https://{server}/chaise/recordset/#{deriva_id}/demo:Samples"
     except Exception as e:
         error_status = {
             "status": "FAILED",
@@ -401,10 +429,13 @@ def action_restore(action_id, url, catalog=None):
     return
 
 
-def action_ingest(action_id, url, catalog_id=None, acls=None):
+def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
     # Download ingest BDBag
     # Excessive try-except blocks because there's (currently) no process management;
     # if the action fails, it needs to always self-report failure
+
+    if not servername:
+        servername = CONFIG["DEFAULT_SERVER_NAME"]
 
     logger.debug(f"{action_id}: Deriva ingest process started for {catalog_id or 'new catalog'}")
     # Setup
@@ -466,9 +497,9 @@ def action_ingest(action_id, url, catalog_id=None, acls=None):
                        if os.path.isdir(os.path.join(bdbag_dir, dirname))][0]
         # Make full path to data dir
         bdbag_data = os.path.join(bdbag_dir, bdbag_inner, "data")
-        # Get schema file (assume exactly one JSON file)
+        # Get schema file (assume exactly one non-hidden JSON file)
         schema_file = [filename for filename in os.listdir(bdbag_data)
-                       if filename.endswith(".json")][0]
+                       if filename.endswith(".json") and not filename.startswith(".")][0]
         schema_file_path = os.path.join(bdbag_data, schema_file)
     except Exception as e:
         error_status = {
@@ -488,7 +519,6 @@ def action_ingest(action_id, url, catalog_id=None, acls=None):
     # Ingest into Deriva
     logger.debug(f"{action_id}: Ingesting into Deriva")
     try:
-        servername = CONFIG["DERIVA_SERVER_NAME"]
         # TODO: Determine schema name from data
         schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
 
@@ -528,7 +558,7 @@ def action_ingest(action_id, url, catalog_id=None, acls=None):
             "deriva_id": catalog_id,
             # "number_ingested": insert_count,
             "deriva_link": (f"https://{servername}/chaise/recordset/"
-                            f"#{catalog_id}/{schema_name}:Dataset"),
+                            f"#{catalog_id}/{schema_name}:dataset"),
             "message": "DERIVA ingest successful"
         }
     }
@@ -540,106 +570,41 @@ def action_ingest(action_id, url, catalog_id=None, acls=None):
                       f"After success on ID '{catalog_id}'")
     return
 
-    '''
-    # Old version of Deriva ingest
-    # Read and convert TableSchema to ERMrest schema
-    # TODO: Will there be exactly on JSON file always? Currently assumed true.
-    logger.debug(f"{action_id}: Converting TableSchema to ERMrest")
-    schema_file = "File not found"
-    try:
-        # Get BDBag extract dir (assume exactly one dir)
-        bdbag_dir = [dirname for dirname in os.listdir(data_dir)
-                     if os.path.isdir(os.path.join(data_dir, dirname))][0]
-        bdbag_data = os.path.join(bdbag_dir, "data")
-        # Get schema file (assume exactly one JSON file
-        schema_file = [filename for filename in os.listdir(bdbag_data)
-                       if filename.endswith(".json")][0]
-        with open(os.path.join(bdbag_data, schema_file)) as f:
-            tableschema = json.load(f)
-        ermrest = utils.convert_tableschema(tableschema, CONFIG["DERIVA_SCHEMA_NAME"])
-    except Exception as e:
-        error_status = {
-            "status": "FAILED",
-            "details": {
-                "error": f"Could not read or convert TableSchema '{schema_file}'"
-            }
-        }
-        try:
-            utils.update_action_status(TBL, action_id, error_status)
-        except Exception as e2:
-            with open("ERROR.log", 'w') as out:
-                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
-                          f"After error '{repr(e)}'")
-        return
 
-    # Create new Deriva catalog
-    logger.debug(f"{action_id}: Initializing new catalog")
-    try:
-        catalog_id = utils.create_deriva_catalog(CONFIG["DERIVA_SERVER_NAME"], ermrest, acls)
-    except Exception as e:
-        error_status = {
-            "status": "FAILED",
-            "details": {
-                "error": f"Unable to create new DERIVA catalog: {str(e)}"
-            }
-        }
-        try:
-            utils.update_action_status(TBL, action_id, error_status)
-        except Exception as e2:
-            with open("ERROR.log", 'w') as out:
-                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
-                          f"After error '{repr(e)}'")
-        return
+def action_modify(action_id, catalog_id, servername=None, acls=None):
+    # Modify the parameters of an existing catalog
+    # Excessive try-except blocks because there's (currently) no process management;
+    # if the action fails, it needs to always self-report failure
+    # Argument acls defaults to None to allow different parameters later on
 
-    # Add new entries into catalog
-    logger.debug(f"{action_id}: Populating new catalog")
+    if not servername:
+        servername = CONFIG["DEFAULT_SERVER_NAME"]
+
+    logger.debug(f"{action_id}: Deriva modify process started for {catalog_id}")
+
+    # Modify Deriva catalog
     try:
-        for table in tableschema.get("resources", []):
-            # Convert TSV to Deriva JSON
-            try:
-                deriva_data = utils.convert_tabular(os.path.join(bdbag_data, table["path"]))
-            except Exception as e:
-                missing_msg = "data file not provided in TableSchema"
-                error_status = {
-                    "status": "FAILED",
-                    "details": {
-                        "error": ("Unable to convert data file "
-                                  f"'{table.get('path', missing_msg)}': {str(e)}")
-                    }
+        # TODO: Determine schema name from catalog
+        schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
+
+        modify_res = utils.deriva_modify(servername, catalog_id, acls=acls)
+        if not modify_res["success"]:
+            error_status = {
+                "status": "FAILED",
+                "details": {
+                    "error": f"Unable to modify catalog {catalog_id}: {modify_res.get('error')}"
                 }
-                # Error here caught by outer try/except
-                utils.update_action_status(TBL, action_id, error_status)
-                return
-            # Perform insert
-            insert_count = 0
-            insert_uris = []
-            try:
-                deriva_result = utils.insert_deriva_data(
-                                        CONFIG["DERIVA_SERVER_NAME"], catalog_id,
-                                        CONFIG["DERIVA_SCHEMA_NAME"], table["name"], deriva_data)
-                if not deriva_result["success"]:
-                    raise ValueError(deriva_result.get("error", "insertion unsuccessful"))
-                insert_count += deriva_result["num_inserted"]
-                insert_uris.append(deriva_result["uri"])
-            except Exception as e:
-                missing_msg = "table name not provided in TableSchema"
-                error_status = {
-                    "status": "FAILED",
-                    "details": {
-                        "error": ("Unable to insert data into table "
-                                  f"'{table.get('name', missing_msg)}': {str(e)}")
-                    }
-                }
-                utils.update_action_status(TBL, action_id, error_status)
-                return
-
+            }
+            utils.update_action_status(TBL, action_id, error_status)
+            return
     except Exception as e:
         error_status = {
             "status": "FAILED",
             "details": {
-                "error": f"Unable to populate new DERIVA catalog: {str(e)}"
+                "error": f"Error modifying DERIVA catalog {catalog_id}: {str(e)}"
             }
         }
+        logger.error(f"{action_id}: Error modifying catalog {catalog_id}: {repr(e)}")
         try:
             utils.update_action_status(TBL, action_id, error_status)
         except Exception as e2:
@@ -649,14 +614,14 @@ def action_ingest(action_id, url, catalog_id=None, acls=None):
         return
 
     # Successful ingest
-    logger.debug(f"{action_id}: Catalog populated with {insert_count} entries")
+    logger.debug(f"{action_id}: Catalog {catalog_id} updated")
     status = {
         "status": "SUCCEEDED",
         "details": {
             "deriva_id": catalog_id,
-            "number_ingested": insert_count,
-            "deriva_uris": insert_uris,
-            "message": "DERIVA ingest successful"
+            "deriva_link": (f"https://{servername}/chaise/recordset/"
+                            f"#{catalog_id}/{schema_name}:dataset"),
+            "message": "DERIVA catalog modification successful"
         }
     }
     try:
@@ -666,4 +631,3 @@ def action_ingest(action_id, url, catalog_id=None, acls=None):
             out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
                       f"After success on ID '{catalog_id}'")
     return
-    '''
