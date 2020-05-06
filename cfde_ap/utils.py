@@ -471,7 +471,7 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
     Arguments:
         servername (str): The name of the DERIVA server.
         data_json_file (str): The path to the JSON file with TableSchema data.
-        catalog_id (str): If updating an existing catalog, the existing catalog ID.
+        catalog_id (str or int): If updating an existing catalog, the existing catalog ID.
                 Default None, to create a new catalog.
         acls (dict): The ACLs to set on the catalog.
                 Default None to use default ACLs.
@@ -481,6 +481,8 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
             success (bool): True when the ingest was successful.
             catalog_id (str): The catalog's ID.
     """
+    if catalog_id:
+        catalog_id = str(int(catalog_id))
     datapack = CfdeDataPackage(data_json_file, verbose=False)
     # Format credentials in DerivaServer-expected format
     creds = {
@@ -533,13 +535,14 @@ def deriva_modify(servername, catalog_id, acls=None):
 
     Arguments:
         servername (str): The name of the DERIVA server
-        catalog_id (str): The ID of the catalog to change. The catalog must exist.
+        catalog_id (str or int): The ID of the catalog to change. The catalog must exist.
         acls (dict): The Access Control Lists to set.
 
     Returns:
         dict: The results of the update.
             success (bool): True if the ACLs were successfully changed.
     """
+    catalog_id = str(int(catalog_id))
     # Format credentials in DerivaServer-expected format
     creds = {
         "bearer-token": get_deriva_token()

@@ -43,7 +43,7 @@ INPUT_SCHEMA = {
                             "demo server.")
         },
         "catalog_id": {
-            "type": "string",
+            "type": ["string", "integer"],
             "description": ("The existing catalog ID to ingest into, or the name of a pre-defined "
                             "catalog (e.g. 'prod'). To create a new catalog, do not specify "
                             "this value. If specified, the catalog must exist.")
