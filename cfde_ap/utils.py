@@ -502,7 +502,7 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
         datapack.apply_custom_config()
     # Using non-canon schema is not failure unless Deriva rejects data
     except Exception:
-        logger.info("Custom config skipped")
+        logger.info(f"Custom config skipped for {catalog.catalog.id}")
     # Apply ACLs - either supplied or CfdeDataPackage default
     # Defaults are set in .apply_custom_config(), which can fail
     if acls is None:
@@ -522,6 +522,13 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
     # Load data from files into DERIVA
     # This is the step that will fail if the data are incorrect
     datapack.load_data_files()
+
+    # Compute relationships
+    try:
+        datapack.load_dataset_ancestor_tables()
+        datapack.load_denorm_tables()
+    except Exception:
+        logger.info(f"Unable to compute relationships for {catalog.catalog_id}")
 
     return {
         "success": True,
