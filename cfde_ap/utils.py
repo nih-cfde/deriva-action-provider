@@ -4,6 +4,7 @@ import os
 import shutil
 import urllib
 
+from bdbag import bdbag_api
 import boto3
 from boto3.dynamodb.conditions import Attr
 import bson  # For IDs
@@ -379,12 +380,12 @@ def _generate_new_deriva_token():
     return tokens["refresh_token"]
 
 
-def download_data(source_loc, local_path):
+def download_data(location, local_path):
     """Download data from a remote host to the configured machine.
     (Many sources to one destination)
 
     Arguments:
-        source_loc (list of str): The location(s) of the data.
+        location (str): The location of the data.
         local_path (str): The path to the local storage location.
 
     Returns:
@@ -399,70 +400,60 @@ def download_data(source_loc, local_path):
         local_path = os.path.dirname(local_path) + "/"
 
     os.makedirs(local_path, exist_ok=True)
-    if not isinstance(source_loc, list):
-        source_loc = [source_loc]
 
-    # Download data locally
-    for location in source_loc:
-        loc_info = urllib.parse.urlparse(location)
-        # HTTP(S)
-        if loc_info.scheme.startswith("http"):
-            # Get default filename and extension
-            http_filename = os.path.basename(loc_info.path)
-            if not http_filename:
-                http_filename = "archive"
-            ext = os.path.splitext(http_filename)[1]
-            if not ext:
-                ext = ".archive"
+    loc_info = urllib.parse.urlparse(location)
+    # HTTP(S)
+    if loc_info.scheme.startswith("http"):
+        # Get default filename and extension
+        http_filename = os.path.basename(loc_info.path)
+        if not http_filename:
+            http_filename = "archive"
+        ext = os.path.splitext(http_filename)[1]
+        if not ext:
+            ext = ".archive"
 
-            # Fetch file
-            res = requests.get(location)
-            # Get filename from header if present
-            con_disp = res.headers.get("Content-Disposition", "")
-            filename_start = con_disp.find("filename=")
-            if filename_start >= 0:
-                filename_end = con_disp.find(";", filename_start)
-                if filename_end < 0:
-                    filename_end = None
-                http_filename = con_disp[filename_start+len("filename="):filename_end]
-                http_filename = http_filename.strip("\"'; ")
+        # Fetch file
+        res = requests.get(location)
+        # Get filename from header if present
+        con_disp = res.headers.get("Content-Disposition", "")
+        filename_start = con_disp.find("filename=")
+        if filename_start >= 0:
+            filename_end = con_disp.find(";", filename_start)
+            if filename_end < 0:
+                filename_end = None
+            http_filename = con_disp[filename_start+len("filename="):filename_end]
+            http_filename = http_filename.strip("\"'; ")
 
-            # Create path for file
-            archive_path = os.path.join(local_path, filename or http_filename)
-            # Make filename unique if filename is duplicate
-            collisions = 0
-            while os.path.exists(archive_path):
-                # Save and remove extension
-                archive_path, ext = os.path.splitext(archive_path)
-                old_add = "({})".format(collisions)
-                collisions += 1
-                new_add = "({})".format(collisions)
-                # If added number already, remove before adding new number
-                if archive_path.endswith(old_add):
-                    archive_path = archive_path[:-len(old_add)]
-                # Add "($num_collisions)" to end of filename to make filename unique
-                archive_path = archive_path + new_add + ext
+        # Create path for file
+        archive_path = os.path.join(local_path, filename or http_filename)
+        # Make filename unique if filename is duplicate
+        collisions = 0
+        while os.path.exists(archive_path):
+            # Save and remove extension
+            archive_path, ext = os.path.splitext(archive_path)
+            old_add = "({})".format(collisions)
+            collisions += 1
+            new_add = "({})".format(collisions)
+            # If added number already, remove before adding new number
+            if archive_path.endswith(old_add):
+                archive_path = archive_path[:-len(old_add)]
+            # Add "($num_collisions)" to end of filename to make filename unique
+            archive_path = archive_path + new_add + ext
 
-            # Download and save file
-            with open(archive_path, 'wb') as out:
-                out.write(res.content)
-            logger.debug("Downloaded HTTP file: {}".format(archive_path))
-        # Not supported
-        else:
-            # Nothing to do
-            raise IOError("Invalid data location: '{}' is not a recognized protocol "
-                          "(from {}).".format(loc_info.scheme, str(location)))
+        # Download and save file
+        with open(archive_path, 'wb') as out:
+            out.write(res.content)
+        logger.debug("Downloaded HTTP file: {}".format(archive_path))
 
-    # Extract all archives, delete extracted archives
-    extract_res = mdf_toolbox.uncompress_tree(local_path, delete_archives=True)
-    if not extract_res["success"]:
-        raise IOError("Unable to extract archives in dataset")
-
-    return {
-        "success": True,
-        "num_extracted": extract_res["num_extracted"],
-        "total_files": sum([len(files) for _, _, files in os.walk(local_path)])
-    }
+        # Assume data is BDBag, extract
+        bag_path = bdbag_api.extract_bag(archive_path, local_path)
+    # Not supported
+    else:
+        # Nothing to do
+        raise IOError("Invalid data location: '{}' is not a recognized protocol "
+                      "(from {}).".format(loc_info.scheme, str(location)))
+    # Return path to bag
+    return bag_path
 
 
 def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):

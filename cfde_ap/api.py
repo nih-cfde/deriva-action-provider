@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import multiprocessing
 import os
+import shutil
 import subprocess
 
 from flask import Flask, jsonify, request
@@ -461,13 +462,11 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
         return
 
     # TODO: Check that catalog exists if catalog_id set
-
     # Download and unarchive link
     logger.debug(f"{action_id}: Downloading '{url}'")
     try:
-        dl_res = utils.download_data([url], data_dir)
-        if not dl_res["success"]:
-            raise ValueError(str(dl_res))
+        bag_path = utils.download_data(url, data_dir)
+        bag_data_path = os.path.join(bag_path, "data")
     except Exception as e:
         error_status = {
             "status": "FAILED",
@@ -487,20 +486,10 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
     schema_file = "File not found"
     logger.debug(f"{action_id}: Determining schema file path")
     try:
-        # Get BDBag extract dir (assume exactly one dir)
-        bdbag_dir = [dirname for dirname in os.listdir(data_dir)
-                     if os.path.isdir(os.path.join(data_dir, dirname))][0]
-        # Make full path
-        bdbag_dir = os.path.join(data_dir, bdbag_dir)
-        # Dir is repeated because of BDBag structure; find inner dir (exactly one)
-        bdbag_inner = [dirname for dirname in os.listdir(bdbag_dir)
-                       if os.path.isdir(os.path.join(bdbag_dir, dirname))][0]
-        # Make full path to data dir
-        bdbag_data = os.path.join(bdbag_dir, bdbag_inner, "data")
-        # Get schema file (assume exactly one non-hidden JSON file)
-        schema_file = [filename for filename in os.listdir(bdbag_data)
+        # Get schema file (assume exactly one non-hidden JSON file inside bag)
+        schema_file = [filename for filename in os.listdir(bag_data_path)
                        if filename.endswith(".json") and not filename.startswith(".")][0]
-        schema_file_path = os.path.join(bdbag_data, schema_file)
+        schema_file_path = os.path.join(bag_data_path, schema_file)
     except Exception as e:
         error_status = {
             "status": "FAILED",
@@ -568,6 +557,13 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
         with open("ERROR.log", 'w') as out:
             out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
                       f"After success on ID '{catalog_id}'")
+
+    # Remove ingested files from disk
+    # Failed ingests are not removed, which helps debugging
+    try:
+        shutil.rmtree(data_dir)
+    except Exception as e:
+        logger.info(f"Data dir '{data_dir}' not deleted after ingest: {repr(e)}")
     return
 
 
