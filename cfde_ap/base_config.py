@@ -13,6 +13,8 @@ BASE_CONFIG = {
     "DATA_DIR": os.path.join(os.path.expanduser("~"), "deriva_data"),
     "DEFAULT_SERVER_NAME": "demo.derivacloud.org",
     "DERIVA_SCHEMA_NAME": "CFDE",
+    "DERIVA_SCHEMA_LOCATION": ("https://raw.githubusercontent.com/nih-cfde/cfde-deriva/"
+                               "master/table-schema/demo-202006-model.json"),
     "FAIR_RE_URL": "https://317ec.36fe.dn.glob.us",
     "TRANSFER_PING_INTERVAL": 60,  # Seconds
     "TRANSFER_DEADLINE": 24 * 60 * 60  # 1 day, in seconds

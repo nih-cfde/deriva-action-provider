@@ -1,7 +1,9 @@
 from copy import deepcopy
+import json
 import logging
 import os
 import shutil
+import tempfile
 import urllib
 
 from bdbag import bdbag_api
@@ -458,21 +460,34 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
             success (bool): True when the ingest was successful.
             catalog_id (str): The catalog's ID.
     """
-    if catalog_id:
-        catalog_id = str(int(catalog_id))
-    datapack = CfdeDataPackage(data_json_file, verbose=False)
     # Format credentials in DerivaServer-expected format
     creds = {
         "bearer-token": get_deriva_token()
     }
+    # Get server object
     server = DerivaServer("https", servername, creds)
+
+    # If ingesting into existing catalog, don't need to provision with schema
     if catalog_id:
+        catalog_id = str(int(catalog_id))
         catalog = server.connect_ermrest(catalog_id)
+    # Otherwise, we need to fetch the latest model for provisioning
     else:
-        catalog = server.create_ermrest_catalog()
+        canon_schema = requests.get(CONFIG["DERIVA_SCHEMA_LOCATION"]).json()
+        with tempfile.TemporaryDirectory() as schema_dir:
+            schema_path = os.path.join(schema_dir, "model.json")
+            with open(schema_path, 'w') as f:
+                json.dump(canon_schema, f)
+
+            provisional_datapack = CfdeDataPackage(schema_path, verbose=False)
+            catalog = server.create_ermrest_catalog()
+            provisional_datapack.set_catalog(catalog)
+            provisional_datapack.provision()
+
+    # Now we create a datapackage to ingest the actual data
+    datapack = CfdeDataPackage(data_json_file, verbose=False)
+    # Catalog was created previously
     datapack.set_catalog(catalog)
-    if not catalog_id:
-        datapack.provision()
 
     # Apply custom config (if possible - may fail if non-canon schema)
     try:
@@ -480,6 +495,7 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
     # Using non-canon schema is not failure unless Deriva rejects data
     except Exception:
         logger.info(f"Custom config skipped for {catalog.catalog.id}")
+
     # Apply ACLs - either supplied or CfdeDataPackage default
     # Defaults are set in .apply_custom_config(), which can fail
     if acls is None:
@@ -499,13 +515,6 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
     # Load data from files into DERIVA
     # This is the step that will fail if the data are incorrect
     datapack.load_data_files()
-
-    # Compute relationships
-    try:
-        datapack.load_dataset_ancestor_tables()
-        datapack.load_denorm_tables()
-    except Exception:
-        logger.info(f"Unable to compute relationships for {catalog.catalog_id}")
 
     return {
         "success": True,
