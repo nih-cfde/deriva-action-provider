@@ -416,6 +416,12 @@ def download_data(location, local_path):
 
         # Fetch file
         with requests.get(location, stream=True) as res:
+            if res.status_code >= 300:
+                logger.error(f"Error {res.status_code} downloading file '{location}': "
+                             f"{res.content}")
+                raise IOError("File download failed: {}".format(res.content))
+            else:
+                logger.debug(f"Downloaded file {location} with status code {res.status_code}")
             # Get filename from header if present
             con_disp = res.headers.get("Content-Disposition", "")
             filename_start = con_disp.find("filename=")
@@ -431,7 +437,7 @@ def download_data(location, local_path):
             # Download and save file
             with open(archive_path, 'wb') as out:
                 shutil.copyfileobj(res.raw, out)
-            logger.debug("Downloaded HTTP file: {}".format(archive_path))
+            logger.debug("Saved HTTP file: {}".format(archive_path))
 
         # Assume data is BDBag, extract
         bag_path = bdbag_api.extract_bag(archive_path, local_path)
