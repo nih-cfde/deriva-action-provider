@@ -547,7 +547,7 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
             "deriva_id": catalog_id,
             # "number_ingested": insert_count,
             "deriva_link": (f"https://{servername}/chaise/recordset/"
-                            f"#{catalog_id}/{schema_name}:dataset"),
+                            f"#{catalog_id}/{schema_name}:project"),
             "message": "DERIVA ingest successful"
         }
     }
@@ -616,7 +616,7 @@ def action_modify(action_id, catalog_id, servername=None, acls=None):
         "details": {
             "deriva_id": catalog_id,
             "deriva_link": (f"https://{servername}/chaise/recordset/"
-                            f"#{catalog_id}/{schema_name}:dataset"),
+                            f"#{catalog_id}/{schema_name}:project"),
             "message": "DERIVA catalog modification successful"
         }
     }
