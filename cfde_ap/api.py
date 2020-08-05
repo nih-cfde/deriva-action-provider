@@ -17,7 +17,7 @@ from openapi_core.wrappers.flask import FlaskOpenAPIResponse, FlaskOpenAPIReques
 import requests
 
 from cfde_ap import CONFIG
-from . import error as err, utils
+from . import actions, error as err, utils
 
 
 # Flask setup
@@ -418,7 +418,8 @@ def action_restore(action_id, url, server=None, catalog=None):
         "details": {
             "deriva_id": deriva_id,
             "deriva_samples_link": deriva_samples,
-            "message": "DERIVA restore successful"
+            "message": "DERIVA restore successful",
+            "error": False
         }
     }
     try:
@@ -511,8 +512,8 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
         # TODO: Determine schema name from data
         schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
 
-        ingest_res = utils.deriva_ingest(servername, schema_file_path,
-                                         catalog_id=catalog_id, acls=acls)
+        ingest_res = actions.deriva_ingest(servername, schema_file_path,
+                                           catalog_id=catalog_id, acls=acls)
         if not ingest_res["success"]:
             error_status = {
                 "status": "FAILED",
@@ -548,7 +549,8 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
             # "number_ingested": insert_count,
             "deriva_link": (f"https://{servername}/chaise/recordset/"
                             f"#{catalog_id}/{schema_name}:project"),
-            "message": "DERIVA ingest successful"
+            "message": "DERIVA ingest successful",
+            "error": False
         }
     }
     try:
@@ -583,7 +585,7 @@ def action_modify(action_id, catalog_id, servername=None, acls=None):
         # TODO: Determine schema name from catalog
         schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
 
-        modify_res = utils.deriva_modify(servername, catalog_id, acls=acls)
+        modify_res = actions.deriva_modify(servername, catalog_id, acls=acls)
         if not modify_res["success"]:
             error_status = {
                 "status": "FAILED",
@@ -617,7 +619,8 @@ def action_modify(action_id, catalog_id, servername=None, acls=None):
             "deriva_id": catalog_id,
             "deriva_link": (f"https://{servername}/chaise/recordset/"
                             f"#{catalog_id}/{schema_name}:project"),
-            "message": "DERIVA catalog modification successful"
+            "message": "DERIVA catalog modification successful",
+            "error": False
         }
     }
     try:
