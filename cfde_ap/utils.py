@@ -4,17 +4,16 @@ import os
 import shutil
 import urllib
 
+from bdbag import bdbag_api
 import boto3
 from boto3.dynamodb.conditions import Attr
 import bson  # For IDs
-from deriva.core import DerivaServer
 import globus_sdk
 import mdf_toolbox
 import requests
 
 from cfde_ap import CONFIG
 from . import error as err
-from cfde_deriva.datapackage import CfdeDataPackage
 
 
 logger = logging.getLogger(__name__)
@@ -379,12 +378,12 @@ def _generate_new_deriva_token():
     return tokens["refresh_token"]
 
 
-def download_data(source_loc, local_path):
+def download_data(location, local_path):
     """Download data from a remote host to the configured machine.
     (Many sources to one destination)
 
     Arguments:
-        source_loc (list of str): The location(s) of the data.
+        location (str): The location of the data.
         local_path (str): The path to the local storage location.
 
     Returns:
@@ -399,24 +398,26 @@ def download_data(source_loc, local_path):
         local_path = os.path.dirname(local_path) + "/"
 
     os.makedirs(local_path, exist_ok=True)
-    if not isinstance(source_loc, list):
-        source_loc = [source_loc]
 
-    # Download data locally
-    for location in source_loc:
-        loc_info = urllib.parse.urlparse(location)
-        # HTTP(S)
-        if loc_info.scheme.startswith("http"):
-            # Get default filename and extension
-            http_filename = os.path.basename(loc_info.path)
-            if not http_filename:
-                http_filename = "archive"
-            ext = os.path.splitext(http_filename)[1]
-            if not ext:
-                ext = ".archive"
+    loc_info = urllib.parse.urlparse(location)
+    # HTTP(S)
+    if loc_info.scheme.startswith("http"):
+        # Get default filename and extension
+        http_filename = os.path.basename(loc_info.path)
+        if not http_filename:
+            http_filename = "archive"
+        ext = os.path.splitext(http_filename)[1]
+        if not ext:
+            ext = ".archive"
 
-            # Fetch file
-            res = requests.get(location)
+        # Fetch file
+        with requests.get(location, stream=True) as res:
+            if res.status_code >= 300:
+                logger.error(f"Error {res.status_code} downloading file '{location}': "
+                             f"{res.content}")
+                raise IOError("File download failed: {}".format(res.content))
+            else:
+                logger.debug(f"Downloaded file {location} with status code {res.status_code}")
             # Get filename from header if present
             con_disp = res.headers.get("Content-Disposition", "")
             filename_start = con_disp.find("filename=")
@@ -429,99 +430,17 @@ def download_data(source_loc, local_path):
 
             # Create path for file
             archive_path = os.path.join(local_path, filename or http_filename)
-            # Make filename unique if filename is duplicate
-            collisions = 0
-            while os.path.exists(archive_path):
-                # Save and remove extension
-                archive_path, ext = os.path.splitext(archive_path)
-                old_add = "({})".format(collisions)
-                collisions += 1
-                new_add = "({})".format(collisions)
-                # If added number already, remove before adding new number
-                if archive_path.endswith(old_add):
-                    archive_path = archive_path[:-len(old_add)]
-                # Add "($num_collisions)" to end of filename to make filename unique
-                archive_path = archive_path + new_add + ext
-
             # Download and save file
             with open(archive_path, 'wb') as out:
-                out.write(res.content)
-            logger.debug("Downloaded HTTP file: {}".format(archive_path))
-        # Not supported
-        else:
-            # Nothing to do
-            raise IOError("Invalid data location: '{}' is not a recognized protocol "
-                          "(from {}).".format(loc_info.scheme, str(location)))
+                shutil.copyfileobj(res.raw, out)
+            logger.debug("Saved HTTP file: {}".format(archive_path))
 
-    # Extract all archives, delete extracted archives
-    extract_res = mdf_toolbox.uncompress_tree(local_path, delete_archives=True)
-    if not extract_res["success"]:
-        raise IOError("Unable to extract archives in dataset")
-
-    return {
-        "success": True,
-        "num_extracted": extract_res["num_extracted"],
-        "total_files": sum([len(files) for _, _, files in os.walk(local_path)])
-    }
-
-
-def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
-    """Perform an ingest to DERIVA into a catalog, using the CfdeDataPackage.
-
-    Arguments:
-        servername (str): The name of the DERIVA server.
-        data_json_file (str): The path to the JSON file with TableSchema data.
-        catalog_id (str): If updating an existing catalog, the existing catalog ID.
-                Default None, to create a new catalog.
-        acls (dict): The ACLs to set on the catalog.
-                Default None to use default ACLs.
-
-    Returns:
-        dict: The result of the ingest.
-            success (bool): True when the ingest was successful.
-            catalog_id (str): The catalog's ID.
-    """
-    datapack = CfdeDataPackage(data_json_file, verbose=False)
-    # Format credentials in DerivaServer-expected format
-    creds = {
-        "bearer-token": get_deriva_token()
-    }
-    server = DerivaServer("https", servername, creds)
-    if catalog_id:
-        catalog = server.connect_ermrest(catalog_id)
+        # Assume data is BDBag, extract
+        bag_path = bdbag_api.extract_bag(archive_path, local_path)
+    # Not supported
     else:
-        catalog = server.create_ermrest_catalog()
-    datapack.set_catalog(catalog)
-    if not catalog_id:
-        datapack.provision()
-
-    # Apply custom config (if possible - may fail if non-canon schema)
-    try:
-        datapack.apply_custom_config()
-    # Using non-canon schema is not failure unless Deriva rejects data
-    except Exception:
-        logger.info("Custom config skipped")
-    # Apply ACLs - either supplied or CfdeDataPackage default
-    # Defaults are set in .apply_custom_config(), which can fail
-    if acls is None:
-        acls = dict(CfdeDataPackage.catalog_acls)
-    # Ensure catalog owner still in ACLs - DERIVA forbids otherwise
-    acls['owner'] = list(set(acls['owner']).union(datapack.cat_model_root.acls['owner']))
-    # Apply acls
-    datapack.cat_model_root.acls.update(acls)
-    # Set ERMrest access
-    datapack.cat_model_root.table('public', 'ERMrest_Client').acls\
-            .update(datapack.ermrestclient_acls)
-    datapack.cat_model_root.table('public', 'ERMrest_Group').acls\
-            .update(datapack.ermrestclient_acls)
-    # Submit changes to server
-    datapack.cat_model_root.apply()
-
-    # Load data from files into DERIVA
-    # This is the step that will fail if the data are incorrect
-    datapack.load_data_files()
-
-    return {
-        "success": True,
-        "catalog_id": catalog.catalog_id
-    }
+        # Nothing to do
+        raise IOError("Invalid data location: '{}' is not a recognized protocol "
+                      "(from {}).".format(loc_info.scheme, str(location)))
+    # Return path to bag
+    return bag_path

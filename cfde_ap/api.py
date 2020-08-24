@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import multiprocessing
 import os
+import shutil
 import subprocess
 
 from flask import Flask, jsonify, request
@@ -16,7 +17,7 @@ from openapi_core.wrappers.flask import FlaskOpenAPIResponse, FlaskOpenAPIReques
 import requests
 
 from cfde_ap import CONFIG
-from . import error as err, utils
+from . import actions, error as err, utils
 
 
 # Flask setup
@@ -130,6 +131,16 @@ def run():
         # Raise just the first line of the exception text, which contains the error
         # The entire body and schema are in the exception, which are too verbose
         raise err.InvalidRequest(str(e).split("\n")[0])
+    # Must have data_url if ingest or restore
+    if body["operation"] in ["ingest", "restore"] and not body.get("data_url"):
+        raise err.InvalidRequest("You must provide a data_url to ingest or restore.")
+    # Must have catalog_id to modify and content to change (currently only ACL)
+    elif body["operation"] == "modify":
+        if not body.get("catalog_id"):
+            raise err.InvalidRequest("You must specify the catalog_id to modify.")
+        elif not body.get("catalog_acls"):
+            raise err.InvalidRequest("You must specify content in the catalog to modify. "
+                                     "(Currently only catalog_acls qualifies.)")
     # If request_id has been submitted before, return status instead of starting new
     try:
         status = utils.read_action_by_request(TBL, req["request_id"])
@@ -231,10 +242,6 @@ def release(action_id):
 #######################################
 
 def start_action(action_id, action_data):
-    # Transform input from Automate, if Transferred before ingesting
-    if action_data.get("fair_re_path"):
-        action_data["data_url"] = CONFIG["FAIR_RE_URL"] + action_data.pop("fair_re_path")
-
     # Process keyword catalog ID
     if action_data.get("catalog_id") in CONFIG["KNOWN_CATALOGS"].keys():
         catalog_info = CONFIG["KNOWN_CATALOGS"][action_data["catalog_id"]]
@@ -249,7 +256,7 @@ def start_action(action_id, action_data):
     # TODO: Process management
     #       Currently assuming process manages itself
     # Restore Action
-    if action_data.get("restore"):
+    if action_data["operation"] == "restore":
         logger.info(f"{action_id}: Starting Deriva restore into "
                     f"{action_data.get('catalog_id', 'new catalog')}")
         # Spawn new process
@@ -258,7 +265,7 @@ def start_action(action_id, action_data):
         driver = multiprocessing.Process(target=action_restore, args=args, name=action_id)
         driver.start()
     # Ingest Action
-    else:
+    elif action_data["operation"] == "ingest":
         logger.info(f"{action_id}: Starting Deriva ingest into "
                     f"{action_data.get('catalog_id', 'new catalog')}")
         # Spawn new process
@@ -266,6 +273,16 @@ def start_action(action_id, action_data):
                 action_data.get("catalog_id"), action_data.get("catalog_acls"))
         driver = multiprocessing.Process(target=action_ingest, args=args, name=action_id)
         driver.start()
+    elif action_data["operation"] == "modify":
+        logger.info(f"{action_id}: Starting Deriva modification of "
+                    f"{action_data['catalog_id']}")
+        # Spawn new process
+        args = (action_id, action_data["catalog_id"], action_data.get("server"),
+                action_data.get("catalog_acls"))
+        driver = multiprocessing.Process(target=action_modify, args=args, name=action_id)
+        driver.start()
+    else:
+        raise err.InvalidRequest("Operation '{}' unknown".format(action_data["operation"]))
     return
 
 
@@ -401,7 +418,8 @@ def action_restore(action_id, url, server=None, catalog=None):
         "details": {
             "deriva_id": deriva_id,
             "deriva_samples_link": deriva_samples,
-            "message": "DERIVA restore successful"
+            "message": "DERIVA restore successful",
+            "error": False
         }
     }
     try:
@@ -445,13 +463,11 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
         return
 
     # TODO: Check that catalog exists if catalog_id set
-
     # Download and unarchive link
     logger.debug(f"{action_id}: Downloading '{url}'")
     try:
-        dl_res = utils.download_data([url], data_dir)
-        if not dl_res["success"]:
-            raise ValueError(str(dl_res))
+        bag_path = utils.download_data(url, data_dir)
+        bag_data_path = os.path.join(bag_path, "data")
     except Exception as e:
         error_status = {
             "status": "FAILED",
@@ -471,20 +487,10 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
     schema_file = "File not found"
     logger.debug(f"{action_id}: Determining schema file path")
     try:
-        # Get BDBag extract dir (assume exactly one dir)
-        bdbag_dir = [dirname for dirname in os.listdir(data_dir)
-                     if os.path.isdir(os.path.join(data_dir, dirname))][0]
-        # Make full path
-        bdbag_dir = os.path.join(data_dir, bdbag_dir)
-        # Dir is repeated because of BDBag structure; find inner dir (exactly one)
-        bdbag_inner = [dirname for dirname in os.listdir(bdbag_dir)
-                       if os.path.isdir(os.path.join(bdbag_dir, dirname))][0]
-        # Make full path to data dir
-        bdbag_data = os.path.join(bdbag_dir, bdbag_inner, "data")
-        # Get schema file (assume exactly one non-hidden JSON file)
-        schema_file = [filename for filename in os.listdir(bdbag_data)
+        # Get schema file (assume exactly one non-hidden JSON file inside bag)
+        schema_file = [filename for filename in os.listdir(bag_data_path)
                        if filename.endswith(".json") and not filename.startswith(".")][0]
-        schema_file_path = os.path.join(bdbag_data, schema_file)
+        schema_file_path = os.path.join(bag_data_path, schema_file)
     except Exception as e:
         error_status = {
             "status": "FAILED",
@@ -503,12 +509,11 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
     # Ingest into Deriva
     logger.debug(f"{action_id}: Ingesting into Deriva")
     try:
-        servername = CONFIG["DEFAULT_SERVER_NAME"]
         # TODO: Determine schema name from data
         schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
 
-        ingest_res = utils.deriva_ingest(servername, schema_file_path,
-                                         catalog_id=catalog_id, acls=acls)
+        ingest_res = actions.deriva_ingest(servername, schema_file_path,
+                                           catalog_id=catalog_id, acls=acls)
         if not ingest_res["success"]:
             error_status = {
                 "status": "FAILED",
@@ -543,8 +548,79 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
             "deriva_id": catalog_id,
             # "number_ingested": insert_count,
             "deriva_link": (f"https://{servername}/chaise/recordset/"
-                            f"#{catalog_id}/{schema_name}:dataset"),
-            "message": "DERIVA ingest successful"
+                            f"#{catalog_id}/{schema_name}:project"),
+            "message": "DERIVA ingest successful",
+            "error": False
+        }
+    }
+    try:
+        utils.update_action_status(TBL, action_id, status)
+    except Exception as e:
+        with open("ERROR.log", 'w') as out:
+            out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
+                      f"After success on ID '{catalog_id}'")
+
+    # Remove ingested files from disk
+    # Failed ingests are not removed, which helps debugging
+    try:
+        shutil.rmtree(data_dir)
+    except Exception as e:
+        logger.info(f"Data dir '{data_dir}' not deleted after ingest: {repr(e)}")
+    return
+
+
+def action_modify(action_id, catalog_id, servername=None, acls=None):
+    # Modify the parameters of an existing catalog
+    # Excessive try-except blocks because there's (currently) no process management;
+    # if the action fails, it needs to always self-report failure
+    # Argument acls defaults to None to allow different parameters later on
+
+    if not servername:
+        servername = CONFIG["DEFAULT_SERVER_NAME"]
+
+    logger.debug(f"{action_id}: Deriva modify process started for {catalog_id}")
+
+    # Modify Deriva catalog
+    try:
+        # TODO: Determine schema name from catalog
+        schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
+
+        modify_res = actions.deriva_modify(servername, catalog_id, acls=acls)
+        if not modify_res["success"]:
+            error_status = {
+                "status": "FAILED",
+                "details": {
+                    "error": f"Unable to modify catalog {catalog_id}: {modify_res.get('error')}"
+                }
+            }
+            utils.update_action_status(TBL, action_id, error_status)
+            return
+    except Exception as e:
+        error_status = {
+            "status": "FAILED",
+            "details": {
+                "error": f"Error modifying DERIVA catalog {catalog_id}: {str(e)}"
+            }
+        }
+        logger.error(f"{action_id}: Error modifying catalog {catalog_id}: {repr(e)}")
+        try:
+            utils.update_action_status(TBL, action_id, error_status)
+        except Exception as e2:
+            with open("ERROR.log", 'w') as out:
+                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
+                          f"After error '{repr(e)}'")
+        return
+
+    # Successful ingest
+    logger.debug(f"{action_id}: Catalog {catalog_id} updated")
+    status = {
+        "status": "SUCCEEDED",
+        "details": {
+            "deriva_id": catalog_id,
+            "deriva_link": (f"https://{servername}/chaise/recordset/"
+                            f"#{catalog_id}/{schema_name}:project"),
+            "message": "DERIVA catalog modification successful",
+            "error": False
         }
     }
     try:
