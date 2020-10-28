@@ -49,13 +49,13 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
             with open(schema_path, 'w') as f:
                 json.dump(canon_schema, f)
 
-            provisional_datapack = CfdeDataPackage(schema_path, verbose=False)
+            provisional_datapack = CfdeDataPackage(schema_path)
             catalog = server.create_ermrest_catalog()
             provisional_datapack.set_catalog(catalog)
             provisional_datapack.provision()
 
     # Now we create a datapackage to ingest the actual data
-    datapack = CfdeDataPackage(data_json_file, verbose=False)
+    datapack = CfdeDataPackage(data_json_file)
     # Catalog was created previously
     datapack.set_catalog(catalog)
 

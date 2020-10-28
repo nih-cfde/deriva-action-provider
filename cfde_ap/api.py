@@ -40,7 +40,7 @@ logger.addHandler(logfile_handler)
 logger.info("\n\n==========CFDE Action Provider started==========\n")
 
 # Globals specific to this instance
-TBL = CONFIG["DEMO_DYNAMO_TABLE"]
+TBL = CONFIG["DYNAMO_TABLE"]
 ROOT = "/"  # Segregate different APs by root path?
 TOKEN_CHECKER = TokenChecker(CONFIG["GLOBUS_CC_APP"], CONFIG["GLOBUS_SECRET"],
                              [CONFIG["GLOBUS_SCOPE"]], CONFIG["GLOBUS_AUD"])
