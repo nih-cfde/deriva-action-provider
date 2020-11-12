@@ -508,6 +508,7 @@ def action_ingest(action_id, url, servername=None, catalog_id=None, acls=None):
 
     # Ingest into Deriva
     logger.debug(f"{action_id}: Ingesting into Deriva")
+    logger.debug(f"{action_id}: Using schema file {schema_file_path}")
     try:
         # TODO: Determine schema name from data
         schema_name = CONFIG["DERIVA_SCHEMA_NAME"]

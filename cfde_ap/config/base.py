@@ -11,8 +11,8 @@ BASE_CONFIG = {
     "GLOBUS_GROUP": "a437abe3-c9a4-11e9-b441-0efb3ba9a670",
     "DATA_DIR": os.path.join(os.path.expanduser("~"), "deriva_data"),
     "DERIVA_SCHEMA_NAME": "CFDE",
-    "DERIVA_SCHEMA_LOCATION": ("https://raw.githubusercontent.com/nih-cfde/cfde-deriva/"
-                               "master/table-schema/demo-202006-model.json"),
+    "DERIVA_SCHEMA_LOCATION": os.path.join(os.path.expanduser("~"), "cfde-deriva",
+                                           "table-schema", "c2m2-level1-portal-model.json"),
     "TRANSFER_PING_INTERVAL": 60,  # Seconds
     "TRANSFER_DEADLINE": 24 * 60 * 60  # 1 day, in seconds
 }

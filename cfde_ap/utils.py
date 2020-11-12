@@ -357,8 +357,7 @@ def translate_status(raw_status):
 def get_deriva_token():
     # TODO: When decision is made about user auth vs. conf client auth, implement.
     #       Currently using personal refresh token for scope.
-    #       Refresh token will expire in six months(?)
-    #       Date last generated: 9-26-2019
+    #       See keys.py for last-generated date.
 
     return globus_sdk.RefreshTokenAuthorizer(
                         refresh_token=CONFIG["TEMP_REFRESH_TOKEN"],
@@ -370,8 +369,8 @@ def _generate_new_deriva_token():
     # Generate new Refresh Token to be used in get_deriva_token()
     native_client = globus_sdk.NativeAppAuthClient(CONFIG["GLOBUS_NATIVE_APP"])
     native_flow = native_client.oauth2_start_flow(
-                                    requested_scopes=("https://auth.globus.org/scopes/demo."
-                                                      "derivacloud.org/deriva_all"),
+                                    requested_scopes=("https://auth.globus.org/scopes/"
+                                                      "app.nih-cfde.org/deriva_all"),
                                     refresh_tokens=True)
     code = input(f"Auth at '{native_flow.get_authorize_url()}' and paste code:\n")
     tokens = native_flow.exchange_code_for_tokens(code)

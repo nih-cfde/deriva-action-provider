@@ -43,48 +43,73 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
         catalog = server.connect_ermrest(catalog_id)
     # Otherwise, we need to fetch the latest model for provisioning
     else:
+        logger.debug("Provisioning new catalog")
+        '''
         canon_schema = requests.get(CONFIG["DERIVA_SCHEMA_LOCATION"]).json()
         with tempfile.TemporaryDirectory() as schema_dir:
             schema_path = os.path.join(schema_dir, "model.json")
             with open(schema_path, 'w') as f:
                 json.dump(canon_schema, f)
-
-            provisional_datapack = CfdeDataPackage(schema_path)
+        '''
+        try:
+            provisional_datapack = CfdeDataPackage(CONFIG["DERIVA_SCHEMA_LOCATION"])
             catalog = server.create_ermrest_catalog()
             provisional_datapack.set_catalog(catalog)
             provisional_datapack.provision()
+            provisional_datapack.load_data_files()
+        except Exception:
+            # On any exception, delete new catalog if possible, then continue with exception
+            try:
+                catalog.delete_ermrest_catalog(really=True)
+            except Exception as e:
+                logger.error(f"Unable to delete catalog {catalog.catalog_id}: {repr(e)}")
+            raise
 
-    # Now we create a datapackage to ingest the actual data
-    datapack = CfdeDataPackage(data_json_file)
-    # Catalog was created previously
-    datapack.set_catalog(catalog)
-
-    # Apply custom config (if possible - may fail if non-canon schema)
     try:
-        datapack.apply_custom_config()
-    # Using non-canon schema is not failure unless Deriva rejects data
+        # Now we create a datapackage to ingest the actual data
+        logger.debug("Creating CfdeDataPackage")
+        datapack = CfdeDataPackage(data_json_file)
+        # Catalog was created previously
+        datapack.set_catalog(catalog)
+
+        # Apply custom config (if possible - may fail if non-canon schema)
+        logger.debug("Applying custom config")
+        try:
+            datapack.apply_custom_config()
+        # Using non-canon schema is not failure unless Deriva rejects data
+        except Exception:
+            logger.info(f"Custom config skipped for {catalog.catalog.id}")
+
+        # Apply ACLs - either supplied or CfdeDataPackage default
+        # Defaults are set in .apply_custom_config(), which can fail
+        logger.debug("Applying ACLS")
+        if acls is None:
+            acls = dict(CfdeDataPackage.catalog_acls)
+        # Ensure catalog owner still in ACLs - DERIVA forbids otherwise
+        acls['owner'] = list(set(acls['owner']).union(datapack.cat_model_root.acls['owner']))
+        # Apply acls
+        datapack.cat_model_root.acls.update(acls)
+        # Set ERMrest access
+        datapack.cat_model_root.table('public', 'ERMrest_Client').acls\
+                .update(datapack.ermrestclient_acls)
+        datapack.cat_model_root.table('public', 'ERMrest_Group').acls\
+                .update(datapack.ermrestclient_acls)
+        # Submit changes to server
+        datapack.cat_model_root.apply()
+
+        # Load data from files into DERIVA
+        # This is the step that will fail if the data are incorrect
+        logger.debug("Loading data into DERIVA")
+        datapack.load_data_files()
     except Exception:
-        logger.info(f"Custom config skipped for {catalog.catalog.id}")
-
-    # Apply ACLs - either supplied or CfdeDataPackage default
-    # Defaults are set in .apply_custom_config(), which can fail
-    if acls is None:
-        acls = dict(CfdeDataPackage.catalog_acls)
-    # Ensure catalog owner still in ACLs - DERIVA forbids otherwise
-    acls['owner'] = list(set(acls['owner']).union(datapack.cat_model_root.acls['owner']))
-    # Apply acls
-    datapack.cat_model_root.acls.update(acls)
-    # Set ERMrest access
-    datapack.cat_model_root.table('public', 'ERMrest_Client').acls\
-            .update(datapack.ermrestclient_acls)
-    datapack.cat_model_root.table('public', 'ERMrest_Group').acls\
-            .update(datapack.ermrestclient_acls)
-    # Submit changes to server
-    datapack.cat_model_root.apply()
-
-    # Load data from files into DERIVA
-    # This is the step that will fail if the data are incorrect
-    datapack.load_data_files()
+        # On any exception, if this is a new catalog, delete the catalog if possible,
+        # then continue raising original exception
+        if not catalog_id:
+            try:
+                catalog.delete_ermrest_catalog(really=True)
+            except Exception as e:
+                logger.error(f"Unable to delete catalog {catalog.catalog_id}: {repr(e)}")
+        raise
 
     return {
         "success": True,
