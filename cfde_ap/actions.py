@@ -1,11 +1,7 @@
-import json
 import logging
-import os
-import tempfile
 
 from cfde_deriva.datapackage import CfdeDataPackage
 from deriva.core import DerivaServer
-import requests
 
 from cfde_ap import CONFIG
 from .utils import get_deriva_token

@@ -377,13 +377,16 @@ def _generate_new_deriva_token():
     return tokens["refresh_token"]
 
 
-def download_data(location, local_path):
+def download_data(location, local_path, globus_ep=None):
     """Download data from a remote host to the configured machine.
     (Many sources to one destination)
 
     Arguments:
         location (str): The location of the data.
         local_path (str): The path to the local storage location.
+        globus_ep (str): The Globus Endpoint UUID for this data. Used to
+                select a scope to authenticate with. Required iff the location
+                is a non-public Globus Endpoint.
 
     Returns:
         dict: success (bool): True on success, False on failure.
@@ -409,8 +412,28 @@ def download_data(location, local_path):
         if not ext:
             ext = ".archive"
 
+        # Globus endpoints require additional GET params and auth
+        get_params = {}
+        headers = {}
+        globus_url_parts = ["glob.us", "globus.org"]
+        if any([url_part in location for url_part in globus_url_parts]):
+            get_params["download"] = 0
+            # NOTE: This is not secure - an attacker could redirect the authenticated
+            #       call to a malicious server matching the globus_url_parts.
+            #       However, this will not be an issue once the two-step data download
+            #       is in place (user=>staging area, then staging area=>secure storage),
+            #       because the secure storage will not be user-supplied.
+            #       As such, it is fine for this urgent deployment work.
+            if globus_ep:
+                conf_client = globus_sdk.ConfidentialAppAuthClient(
+                                    client_id=CONFIG["GLOBUS_CC_APP"],
+                                    client_secret=CONFIG["GLOBUS_SECRET"])
+                scope = "https://auth.globus.org/scopes/{}/https".format(globus_ep)
+                authorizer = globus_sdk.ClientCredentialsAuthorizer(conf_client, scope)
+                authorizer.set_authorization_header(headers)
+
         # Fetch file
-        with requests.get(location, stream=True) as res:
+        with requests.get(location, stream=True, params=get_params, headers=headers) as res:
             if res.status_code >= 300:
                 logger.error(f"Error {res.status_code} downloading file '{location}': "
                              f"{res.content}")
@@ -435,7 +458,20 @@ def download_data(location, local_path):
             logger.debug("Saved HTTP file: {}".format(archive_path))
 
         # Assume data is BDBag, extract
-        bag_path = bdbag_api.extract_bag(archive_path, local_path)
+        try:
+            bag_path = bdbag_api.extract_bag(archive_path, local_path)
+        except Exception as e:
+            # Issues un-archiving files that should be valid archives are usually
+            #   due to download errors (auth from Globus incorrect, etc.)
+            if ("Archive format not supported for file" in str(e)
+                    # Technically, TAR/GZ/BZ2 are also accepted, but are not expected
+                    and archive_path.endswith("zip")):
+                raise ValueError("Unable to download file: Not recognized as archive. (Most "
+                                 "likely due to a Globus authentication failure.)")
+            # All other errors should be passed on
+            else:
+                raise
+
     # Not supported
     else:
         # Nothing to do
