@@ -32,3 +32,10 @@ elif server == "dev":
 else:
     raise EnvironmentError("FLASK_ENV not correctly set! FLASK_ENV must be 'prod', 'staging',"
                            " or 'dev' to use any part of this Action Provider.")
+
+# These should fail on portal startup if they don't exist
+if not os.path.exists(CONFIG["DATA_DIR"]):
+    raise EnvironmentError(f"DATA_DIR '{CONFIG['DATA_DIR']}' does not exist.")
+if not os.path.exists(CONFIG["DERIVA_SCHEMA_LOCATION"]):
+    raise EnvironmentError(f"DERIVA_SCHEMA_LOCATION '{CONFIG['DERIVA_SCHEMA_LOCATION']}' "
+                           f"does not exist.")
