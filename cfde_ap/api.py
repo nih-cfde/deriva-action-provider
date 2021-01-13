@@ -2,10 +2,9 @@ from datetime import datetime, timedelta, timezone
 import logging.config
 import multiprocessing
 import os
-import shutil
 import subprocess
 
-from flask import Flask, jsonify, request
+from flask import Flask, Blueprint, jsonify, request
 from globus_action_provider_tools.authentication import TokenChecker
 from globus_action_provider_tools.validation import (
     request_validator,
@@ -51,6 +50,7 @@ logging.config.dictConfig({
     },
     'loggers': {
         'cfde_ap': {'level': 'DEBUG', 'handlers': ['console', 'logfile']},
+        'cfde_deriva': {'level': 'DEBUG', 'handlers': ['console', 'logfile']},
     },
 })
 logger = logging.getLogger(__name__)
@@ -66,6 +66,11 @@ TOKEN_CHECKER = TokenChecker(CONFIG["GLOBUS_CC_APP"], CONFIG["GLOBUS_SECRET"],
 # Clean up environment
 utils.clean_environment()
 
+try:
+    utils.initialize_dmo_table(CONFIG["DYNAMO_TABLE"])
+    logger.info(f'Successfully created DynamoDB table: "{CONFIG["DYNAMO_TABLE"]}"')
+except err.InvalidState:
+    logger.debug(f'DynamoDB table already created "{CONFIG["DYNAMO_TABLE"]}"')
 
 #######################################
 # Flask helpers
@@ -281,7 +286,7 @@ def start_action(action_id, action_data):
                     f"{action_data.get('catalog_id', 'new catalog')}")
         # Spawn new process
         args = (action_id, action_data["data_url"], action_data.get("globus_ep"),
-                action_data.get("server"), action_data.get("catalog_id"))
+                action_data.get("server"), action_data.get("dcc_id"))
         driver = multiprocessing.Process(target=action_ingest, args=args, name=action_id)
         driver.start()
     else:
@@ -434,7 +439,7 @@ def action_restore(action_id, url, server=None, catalog=None):
     return
 
 
-def action_ingest(action_id, url, globus_ep=None, servername=None, catalog_id=None):
+def action_ingest(action_id, url, globus_ep=None, servername=None, dcc_id=None):
     # Download ingest BDBag
     # Excessive try-except blocks because there's (currently) no process management;
     # if the action fails, it needs to always self-report failure
@@ -442,80 +447,13 @@ def action_ingest(action_id, url, globus_ep=None, servername=None, catalog_id=No
     if not servername:
         servername = CONFIG["DEFAULT_SERVER_NAME"]
 
-    logger.debug(f"{action_id}: Deriva ingest process started for {catalog_id or 'new catalog'}")
-    # Setup
-    try:
-        data_dir = os.path.join(CONFIG["DATA_DIR"], action_id + "/")
-    except Exception as e:
-        error_status = {
-            "status": "FAILED",
-            "details": {
-                "error": "Error in action setup: " + str(e)
-            }
-        }
-        logger.error(f"{action_id}: Error in action setup: {repr(e)}")
-        # If update fails, last-ditch effort is write to error file for debugging
-        try:
-            utils.update_action_status(TBL, action_id, error_status)
-        except Exception as e2:
-            with open("ERROR.log", 'w') as out:
-                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
-                          f"After error '{repr(e)}'")
-        return
-
-    # TODO: Check that catalog exists if catalog_id set
-    # Download and unarchive link
-    logger.debug(f"{action_id}: Downloading '{url}'")
-    try:
-        bag_path = utils.download_data(url, data_dir, globus_ep)
-        bag_data_path = os.path.join(bag_path, "data")
-    except Exception as e:
-        error_status = {
-            "status": "FAILED",
-            "details": {
-                "error": f"Unable to download URL '{url}': {str(e)}"
-            }
-        }
-        try:
-            utils.update_action_status(TBL, action_id, error_status)
-        except Exception as e2:
-            with open("ERROR.log", 'w') as out:
-                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
-                          f"After error '{repr(e)}'")
-        return
-
-    # Find datapackage JSON file
-    schema_file = "File not found"
-    logger.debug(f"{action_id}: Determining schema file path")
-    try:
-        # Get schema file (assume exactly one non-hidden JSON file inside bag)
-        schema_file = [filename for filename in os.listdir(bag_data_path)
-                       if filename.endswith(".json") and not filename.startswith(".")][0]
-        schema_file_path = os.path.join(bag_data_path, schema_file)
-    except Exception as e:
-        error_status = {
-            "status": "FAILED",
-            "details": {
-                "error": f"Could not process TableSchema file '{schema_file}': {str(e)}"
-            }
-        }
-        try:
-            utils.update_action_status(TBL, action_id, error_status)
-        except Exception as e2:
-            with open("ERROR.log", 'w') as out:
-                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
-                          f"After error '{repr(e)}'")
-        return
-
     # Ingest into Deriva
     logger.debug(f"{action_id}: Ingesting into Deriva")
-    logger.debug(f"{action_id}: Using schema file {schema_file_path}")
     try:
         # TODO: Determine schema name from data
         schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
 
-        ingest_res = actions.deriva_ingest(servername, schema_file_path, catalog_id=catalog_id,
-                                           acls=CONFIG["DEFAULT_ACLS"])
+        ingest_res = actions.deriva_ingest(servername, url, dcc_id=dcc_id, globus_ep=globus_ep)
         if not ingest_res["success"]:
             error_status = {
                 "status": "FAILED",
@@ -543,7 +481,7 @@ def action_ingest(action_id, url, globus_ep=None, servername=None, catalog_id=No
         return
 
     # Successful ingest
-    logger.debug(f"{action_id}: Catalog {catalog_id} populated")
+    logger.debug(f"{action_id}: Catalog {dcc_id} populated")
     status = {
         "status": "SUCCEEDED",
         "details": {
@@ -564,8 +502,4 @@ def action_ingest(action_id, url, globus_ep=None, servername=None, catalog_id=No
 
     # Remove ingested files from disk
     # Failed ingests are not removed, which helps debugging
-    try:
-        shutil.rmtree(data_dir)
-    except Exception as e:
-        logger.info(f"Data dir '{data_dir}' not deleted after ingest: {repr(e)}")
     return

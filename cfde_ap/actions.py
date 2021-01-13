@@ -1,16 +1,18 @@
 import logging
-
-from cfde_deriva.datapackage import CfdeDataPackage
+import uuid
 from deriva.core import DerivaServer
 
 from cfde_ap import CONFIG
-from .utils import get_deriva_token
+from cfde_ap.auth import get_deriva_token, get_dependent_token, get_webauthn_user
+from cfde_deriva.registry import Registry, WebauthnUser
+from cfde_deriva.submission import Submission
+
 
 
 logger = logging.getLogger(__name__)
 
 
-def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
+def deriva_ingest(servername, archive_url, dcc_id=None, globus_ep=None):
     """Perform an ingest to DERIVA into a catalog, using the CfdeDataPackage.
 
     Arguments:
@@ -26,126 +28,28 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
             success (bool): True when the ingest was successful.
             catalog_id (str): The catalog's ID.
     """
-    # Format credentials in DerivaServer-expected format
-    creds = {
-        "bearer-token": get_deriva_token()
+    credential = {
+        "bearer-token": get_dependent_token(CONFIG["DEPENDENT_SCOPES"]["deriva_all"])
     }
-    # Get server object
-    server = DerivaServer("https", servername, creds)
+    registry = Registry('https', servername, credentials=credential)
+    server = DerivaServer('https', servername, credential)
+    submitting_user = get_webauthn_user()
 
-    # If ingesting into existing catalog, don't need to provision with schema
-    if catalog_id:
-        catalog_id = str(int(catalog_id))
-        catalog = server.connect_ermrest(catalog_id)
-    # Otherwise, we need to fetch the latest model for provisioning
-    else:
-        logger.debug("Provisioning new catalog")
-        '''
-        canon_schema = requests.get(CONFIG["DERIVA_SCHEMA_LOCATION"]).json()
-        with tempfile.TemporaryDirectory() as schema_dir:
-            schema_path = os.path.join(schema_dir, "model.json")
-            with open(schema_path, 'w') as f:
-                json.dump(canon_schema, f)
-        '''
-        try:
-            provisional_datapack = CfdeDataPackage(CONFIG["DERIVA_SCHEMA_LOCATION"])
-            catalog = server.create_ermrest_catalog()
-            provisional_datapack.set_catalog(catalog)
-            provisional_datapack.provision()
-            provisional_datapack.load_data_files()
-        except Exception:
-            # On any exception, delete new catalog if possible, then continue with exception
-            try:
-                catalog.delete_ermrest_catalog(really=True)
-            except Exception as e:
-                logger.error(f"Unable to delete catalog {catalog.catalog_id}: {repr(e)}")
-            raise
+    https_token = get_dependent_token(f'https://auth.globus.org/scopes/{globus_ep}/https')
+    # arguments dcc_id and archive_url would come from action provider
+    # and it would also have a different way to obtain a submission ID
+    submission_id = str(uuid.uuid3(uuid.NAMESPACE_URL, archive_url))
 
-    try:
-        # Now we create a datapackage to ingest the actual data
-        logger.debug("Creating CfdeDataPackage")
-        datapack = CfdeDataPackage(data_json_file)
-        # Catalog was created previously
-        datapack.set_catalog(catalog)
+    # pre-flight check like action provider might want to do?
+    # this is optional, implicitly happening again in Submission(...)
+    registry.validate_dcc_id(dcc_id, submitting_user)
 
-        # Apply custom config (if possible - may fail if non-canon schema)
-        logger.debug("Applying custom config")
-        try:
-            datapack.apply_custom_config()
-        # Using non-canon schema is not failure unless Deriva rejects data
-        except Exception:
-            logger.info(f"Custom config skipped for {catalog.catalog.id}")
-
-        # Apply ACLs - either supplied or CfdeDataPackage default
-        # Defaults are set in .apply_custom_config(), which can fail
-        logger.debug("Applying ACLS")
-        if acls is None:
-            acls = dict(CfdeDataPackage.catalog_acls)
-        # Ensure catalog owner still in ACLs - DERIVA forbids otherwise
-        acls['owner'] = list(set(acls['owner']).union(datapack.cat_model_root.acls['owner']))
-        # Apply acls
-        datapack.cat_model_root.acls.update(acls)
-        # Set ERMrest access
-        datapack.cat_model_root.table('public', 'ERMrest_Client').acls\
-                .update(datapack.ermrestclient_acls)
-        datapack.cat_model_root.table('public', 'ERMrest_Group').acls\
-                .update(datapack.ermrestclient_acls)
-        # Submit changes to server
-        datapack.cat_model_root.apply()
-
-        # Load data from files into DERIVA
-        # This is the step that will fail if the data are incorrect
-        logger.debug("Loading data into DERIVA")
-        datapack.load_data_files()
-    except Exception:
-        # On any exception, if this is a new catalog, delete the catalog if possible,
-        # then continue raising original exception
-        if not catalog_id:
-            try:
-                catalog.delete_ermrest_catalog(really=True)
-            except Exception as e:
-                logger.error(f"Unable to delete catalog {catalog.catalog_id}: {repr(e)}")
-        raise
-
+    # Submission.content_path_root = CONFIG['DATA_DIR']
+    # run the actual submission work if we get this far
+    submission = Submission(server, registry, submission_id, dcc_id, archive_url, submitting_user,
+                            globus_https_token=https_token)
+    submission.ingest()
     return {
         "success": True,
-        "catalog_id": catalog.catalog_id
-    }
-
-
-def deriva_modify(servername, catalog_id, acls=None):
-    """Modify a DERIVA catalog's options using the CfdeDataPackage.
-    Currently limited to ACL changes only.
-
-    Arguments:
-        servername (str): The name of the DERIVA server
-        catalog_id (str or int): The ID of the catalog to change. The catalog must exist.
-        acls (dict): The Access Control Lists to set.
-
-    Returns:
-        dict: The results of the update.
-            success (bool): True if the ACLs were successfully changed.
-    """
-    catalog_id = str(int(catalog_id))
-    # Format credentials in DerivaServer-expected format
-    creds = {
-        "bearer-token": get_deriva_token()
-    }
-    # Get the catalog model object to modify
-    server = DerivaServer("https", servername, creds)
-    catalog = server.connect_ermrest(catalog_id)
-    cat_model = catalog.getCatalogModel()
-
-    # If modifying ACL, set ACL
-    if acls:
-        # Ensure catalog owner still in ACLs - DERIVA forbids otherwise
-        acls['owner'] = list(set(acls['owner']).union(cat_model.acls['owner']))
-        # Apply acls
-        cat_model.acls.update(acls)
-
-    # Submit changes to server
-    cat_model.apply()
-
-    return {
-        "success": True
+        "catalog_id": submission_id
     }
