@@ -49,7 +49,10 @@ def deriva_ingest(servername, archive_url, dcc_id=None, globus_ep=None):
     submission = Submission(server, registry, submission_id, dcc_id, archive_url, submitting_user,
                             globus_https_token=https_token)
     submission.ingest()
+
+    md = registry.get_datapackage(submission_id)
     return {
         "success": True,
-        "catalog_id": submission_id
+        "catalog_id": submission_id,
+        "catalog_url": md['review_browse_url']
     }

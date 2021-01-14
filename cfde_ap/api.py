@@ -487,8 +487,7 @@ def action_ingest(action_id, url, globus_ep=None, servername=None, dcc_id=None):
         "details": {
             "deriva_id": catalog_id,
             # "number_ingested": insert_count,
-            "deriva_link": (f"https://{servername}/chaise/recordset/"
-                            f"#{catalog_id}/{schema_name}:project"),
+            "deriva_link": ingest_res["catalog_url"],
             "message": "DERIVA ingest successful",
             "error": False
         }
