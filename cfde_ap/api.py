@@ -65,12 +65,7 @@ TOKEN_CHECKER = TokenChecker(CONFIG["GLOBUS_CC_APP"], CONFIG["GLOBUS_SECRET"],
 
 # Clean up environment
 utils.clean_environment()
-
-try:
-    utils.initialize_dmo_table(CONFIG["DYNAMO_TABLE"])
-    logger.info(f'Successfully created DynamoDB table: "{CONFIG["DYNAMO_TABLE"]}"')
-except err.InvalidState:
-    logger.debug(f'DynamoDB table already created "{CONFIG["DYNAMO_TABLE"]}"')
+utils.initialize_dmo_table(CONFIG["DYNAMO_TABLE"])
 
 #######################################
 # Flask helpers

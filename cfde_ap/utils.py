@@ -54,8 +54,6 @@ def clean_environment():
 
 def initialize_dmo_table(table_name, schema=DMO_SCHEMA, client=DMO_CLIENT):
     """Init a table in DynamoDB, by default the DMO_TABLE with DMO_SCHEMA.
-    Currently not intended to be called in a script;
-    table creation is only necessary once per table.
 
     Arguments:
         table_name (str): The name for the DynamoDB table.
@@ -71,11 +69,11 @@ def initialize_dmo_table(table_name, schema=DMO_SCHEMA, client=DMO_CLIENT):
     """
     # Table should not be active already
     try:
-        get_dmo_table(table_name, client)
+        table = get_dmo_table(table_name, client)
+        logger.debug(f'DynamoDB table already created "{CONFIG["DYNAMO_TABLE"]}"')
+        return table
     except err.NotFound:
         pass
-    else:
-        raise err.InvalidState("Table already created")
 
     schema = deepcopy(DMO_SCHEMA)
     schema["TableName"] = table_name
@@ -83,6 +81,7 @@ def initialize_dmo_table(table_name, schema=DMO_SCHEMA, client=DMO_CLIENT):
     try:
         new_table = client.create_table(**schema)
         new_table.wait_until_exists()
+        logger.info(f'Successfully created DynamoDB table: "{table_name}"')
     except client.meta.client.exceptions.ResourceInUseException:
         raise err.InvalidState("Table concurrently created")
     except Exception as e:
