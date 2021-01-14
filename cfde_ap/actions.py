@@ -12,7 +12,7 @@ from cfde_deriva.submission import Submission
 logger = logging.getLogger(__name__)
 
 
-def deriva_ingest(servername, archive_url, dcc_id=None, globus_ep=None):
+def deriva_ingest(servername, archive_url, dcc_id=None, globus_ep=None, action_id=None):
     """Perform an ingest to DERIVA into a catalog, using the CfdeDataPackage.
 
     Arguments:
@@ -36,9 +36,10 @@ def deriva_ingest(servername, archive_url, dcc_id=None, globus_ep=None):
     submitting_user = get_webauthn_user()
 
     https_token = get_dependent_token(f'https://auth.globus.org/scopes/{globus_ep}/https')
-    # arguments dcc_id and archive_url would come from action provider
-    # and it would also have a different way to obtain a submission ID
-    submission_id = str(uuid.uuid3(uuid.NAMESPACE_URL, archive_url))
+    # the Globus action_id is used as the Submission id, this allows us to track submissions
+    # in Deriva back to an action.
+    submission_id = action_id
+    logger.info(f'Submitting new dataset into Deriva using submission id {submission_id}')
 
     # pre-flight check like action provider might want to do?
     # this is optional, implicitly happening again in Submission(...)
