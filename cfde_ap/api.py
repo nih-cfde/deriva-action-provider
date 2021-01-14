@@ -27,6 +27,7 @@ app.url_map.strict_slashes = False
 # Logging setup
 logging.config.dictConfig({
     'version': 1,
+    'disable_existing_loggers': False,
     'formatters': {
         'basic': {
             'format': "[{asctime}] [{levelname}] {name}.{funcName}-{processName}: {message}",
@@ -51,7 +52,12 @@ logging.config.dictConfig({
     'loggers': {
         'cfde_ap': {'level': 'DEBUG', 'handlers': ['console', 'logfile']},
         'cfde_deriva': {'level': 'DEBUG', 'handlers': ['console', 'logfile']},
+        'bdbag': {'level': 'DEBUG', 'handlers': ['console', 'logfile']},
     },
+    # 'root': {
+    #     'level': 'DEBUG',
+    #     'handlers': ['console', 'logfile']
+    # },
 })
 logger = logging.getLogger(__name__)
 
