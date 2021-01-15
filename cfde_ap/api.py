@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import logging.config
-import multiprocessing.dummy as multiprocessing
+import multiprocessing
 
 from flask import Flask, jsonify, request
 from globus_action_provider_tools.authentication import TokenChecker

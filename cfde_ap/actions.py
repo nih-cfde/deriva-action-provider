@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def deriva_ingest(servername, archive_url, deriva_webauthn_user,
-                  dcc_id=None, globus_ep=None, action_id=None,):
+                  dcc_id=None, globus_ep=None, action_id=None):
     """Perform an ingest to DERIVA into a catalog, using the CfdeDataPackage.
 
     Arguments:
@@ -31,7 +31,6 @@ def deriva_ingest(servername, archive_url, deriva_webauthn_user,
     }
     registry = Registry('https', servername, credentials=credential)
     server = DerivaServer('https', servername, credential)
-    # submitting_user = get_webauthn_user()
 
     https_token = get_dependent_token(f'https://auth.globus.org/scopes/{globus_ep}/https')
     # the Globus action_id is used as the Submission id, this allows us to track submissions
@@ -50,9 +49,7 @@ def deriva_ingest(servername, archive_url, deriva_webauthn_user,
     header_map = {
         CONFIG['ALLOWED_GCS_HTTPS_HOSTS']: {"Authorization": f"Bearer {https_token}"}
     }
-    import pdb
-    # pdb.set_trace()
-    submission = Submission(server, registry, submission_id, dcc_id, archive_url, submitting_user,
+    submission = Submission(server, registry, submission_id, dcc_id, archive_url, deriva_webauthn_user,
                             archive_headers_map=header_map)
     submission.ingest()
 
