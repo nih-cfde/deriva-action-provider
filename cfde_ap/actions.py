@@ -9,7 +9,8 @@ from cfde_deriva.submission import Submission
 logger = logging.getLogger(__name__)
 
 
-def deriva_ingest(servername, archive_url, dcc_id=None, globus_ep=None, action_id=None):
+def deriva_ingest(servername, archive_url, deriva_webauthn_user,
+                  dcc_id=None, globus_ep=None, action_id=None,):
     """Perform an ingest to DERIVA into a catalog, using the CfdeDataPackage.
 
     Arguments:
@@ -30,7 +31,7 @@ def deriva_ingest(servername, archive_url, dcc_id=None, globus_ep=None, action_i
     }
     registry = Registry('https', servername, credentials=credential)
     server = DerivaServer('https', servername, credential)
-    submitting_user = get_webauthn_user()
+    # submitting_user = get_webauthn_user()
 
     https_token = get_dependent_token(f'https://auth.globus.org/scopes/{globus_ep}/https')
     # the Globus action_id is used as the Submission id, this allows us to track submissions
@@ -40,7 +41,7 @@ def deriva_ingest(servername, archive_url, dcc_id=None, globus_ep=None, action_i
 
     # pre-flight check like action provider might want to do?
     # this is optional, implicitly happening again in Submission(...)
-    registry.validate_dcc_id(dcc_id, submitting_user)
+    registry.validate_dcc_id(dcc_id, deriva_webauthn_user)
 
     # The Header map protects from submitting our https_token to non-Globus URLs. This MUST
     # match, otherwise the Submission() client will attempt to download the Globus GCS Auth
@@ -49,6 +50,8 @@ def deriva_ingest(servername, archive_url, dcc_id=None, globus_ep=None, action_i
     header_map = {
         CONFIG['ALLOWED_GCS_HTTPS_HOSTS']: {"Authorization": f"Bearer {https_token}"}
     }
+    import pdb
+    # pdb.set_trace()
     submission = Submission(server, registry, submission_id, dcc_id, archive_url, submitting_user,
                             archive_headers_map=header_map)
     submission.ingest()

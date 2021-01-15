@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import logging.config
-import multiprocessing
+import multiprocessing.dummy as multiprocessing
 
 from flask import Flask, jsonify, request
 from globus_action_provider_tools.authentication import TokenChecker
@@ -12,6 +12,7 @@ from isodate import duration_isoformat, parse_duration, parse_datetime
 import jsonschema
 from openapi_core.wrappers.flask import FlaskOpenAPIResponse, FlaskOpenAPIRequest
 
+import cfde_ap.auth
 from cfde_ap import CONFIG
 from . import actions, error as err, utils
 
@@ -273,7 +274,8 @@ def start_action(action_id, action_data):
         logger.info(f"{action_id}: Starting Deriva ingest into "
                     f"{action_data.get('catalog_id', 'new catalog')}")
         # Spawn new process
-        args = (action_id, action_data["data_url"], action_data.get("globus_ep"),
+        deriva_webauthn_user = cfde_ap.auth.get_webauthn_user()
+        args = (action_id, action_data["data_url"], deriva_webauthn_user, action_data.get("globus_ep"),
                 action_data.get("server"), action_data.get("dcc_id"))
         driver = multiprocessing.Process(target=action_ingest, args=args, name=action_id)
         driver.start()
@@ -294,7 +296,7 @@ def cancel_action(action_id):
 #######################################
 
 
-def action_ingest(action_id, url, globus_ep=None, servername=None, dcc_id=None):
+def action_ingest(action_id, url, deriva_webauthn_user, globus_ep=None, servername=None, dcc_id=None):
     # Download ingest BDBag
     # Excessive try-except blocks because there's (currently) no process management;
     # if the action fails, it needs to always self-report failure
@@ -305,8 +307,8 @@ def action_ingest(action_id, url, globus_ep=None, servername=None, dcc_id=None):
     # Ingest into Deriva
     logger.debug(f"{action_id}: Ingesting into Deriva")
     try:
-        ingest_res = actions.deriva_ingest(servername, url, dcc_id=dcc_id, globus_ep=globus_ep,
-                                           action_id=action_id)
+        ingest_res = actions.deriva_ingest(servername, url, deriva_webauthn_user,
+                                           dcc_id=dcc_id, globus_ep=globus_ep, action_id=action_id)
         if not ingest_res["success"]:
             error_status = {
                 "status": "FAILED",
