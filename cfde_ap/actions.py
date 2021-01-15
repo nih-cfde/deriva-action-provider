@@ -1,13 +1,10 @@
 import logging
-import uuid
 from deriva.core import DerivaServer
 
 from cfde_ap import CONFIG
 from cfde_ap.auth import get_dependent_token, get_webauthn_user
-from cfde_deriva.registry import Registry, WebauthnUser
+from cfde_deriva.registry import Registry
 from cfde_deriva.submission import Submission
-
-
 
 logger = logging.getLogger(__name__)
 

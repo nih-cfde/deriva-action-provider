@@ -1,10 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import logging.config
 import multiprocessing
-import os
-import subprocess
 
-from flask import Flask, Blueprint, jsonify, request
+from flask import Flask, jsonify, request
 from globus_action_provider_tools.authentication import TokenChecker
 from globus_action_provider_tools.validation import (
     request_validator,
@@ -13,7 +11,6 @@ from globus_action_provider_tools.validation import (
 from isodate import duration_isoformat, parse_duration, parse_datetime
 import jsonschema
 from openapi_core.wrappers.flask import FlaskOpenAPIResponse, FlaskOpenAPIRequest
-import requests
 
 from cfde_ap import CONFIG
 from . import actions, error as err, utils
@@ -76,6 +73,7 @@ utils.initialize_dmo_table(CONFIG["DYNAMO_TABLE"])
 #######################################
 # Flask helpers
 #######################################
+
 
 @app.errorhandler(err.ApiError)
 def handle_invalid_usage(error):
@@ -270,17 +268,6 @@ def start_action(action_id, action_data):
             raise ValueError(f"Server '{action_data['server']}' does not match server for "
                              f"catalog '{action_data['catalog_id']}' ({catalog_info['server']})")
 
-    # TODO: Process management
-    #       Currently assuming process manages itself
-    # Restore Action
-    if action_data["operation"] == "restore":
-        logger.debug(f"{action_id}: Starting Deriva restore into "
-                     f"{action_data.get('catalog_id', 'new catalog')}")
-        # Spawn new process
-        args = (action_id, action_data["data_url"], action_data.get("server"),
-                action_data.get("catalog_id"))
-        driver = multiprocessing.Process(target=action_restore, args=args, name=action_id)
-        driver.start()
     # Ingest Action
     elif action_data["operation"] == "ingest":
         logger.info(f"{action_id}: Starting Deriva ingest into "
@@ -306,139 +293,6 @@ def cancel_action(action_id):
 # Asynchronous actions
 #######################################
 
-def action_restore(action_id, url, server=None, catalog=None):
-    token = utils.get_deriva_token()
-    if not server:
-        server = CONFIG["DEFAULT_SERVER_NAME"]
-
-    # Download backup zip file
-    # TODO: Determine file type
-    #       Use original file name (Content-Disposition)
-    #       Make filename unique if collision
-
-    # Excessive try-except blocks because there's (currently) no process management;
-    # if the action fails, it needs to always self-report failure
-
-    logger.debug(f"{action_id}: Deriva restore process started")
-    # Setup
-    try:
-        file_path = os.path.join(CONFIG["DATA_DIR"], "cfde-backup.zip")
-    except Exception as e:
-        error_status = {
-            "status": "FAILED",
-            "details": {
-                "error": "Error in action setup: " + str(e)
-            }
-        }
-        logger.error(f"{action_id}: Error in action setup: {repr(e)}")
-        # If update fails, last-ditch effort is write to error file for debugging
-        try:
-            utils.update_action_status(TBL, action_id, error_status)
-        except Exception as e2:
-            with open("ERROR.log", 'w') as out:
-                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
-                          f"After error '{repr(e)}'")
-        return
-    # TODO: Check that catalog exists - non-existent catalog will fail
-
-    logger.debug(f"{action_id}: Downloading '{url}'")
-    # Download link
-    try:
-        with open(file_path, 'wb') as output:
-            output.write(requests.get(url).content)
-    except Exception as e:
-        error_status = {
-            "status": "FAILED",
-            "details": {
-                "error": f"Unable to download URL '{url}': {str(e)}"
-            }
-        }
-        try:
-            utils.update_action_status(TBL, action_id, error_status)
-        except Exception as e2:
-            with open("ERROR.log", 'w') as out:
-                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
-                          f"After error '{repr(e)}'")
-        return
-
-    # TODO: Use package calls instead of subprocess
-    logger.debug(f"{action_id}: Restoring with script")
-    try:
-        restore_args = [
-            "deriva-restore-cli",
-            "--oauth2-token",
-            token
-        ]
-        if catalog is not None:
-            restore_args.extend([
-                "--catalog",
-                catalog
-            ])
-        restore_args.extend([
-            server,
-            file_path
-        ])
-        restore_res = subprocess.run(restore_args, capture_output=True)
-        restore_message = restore_res.stderr + restore_res.stdout
-    except Exception as e:
-        error_status = {
-            "status": "FAILED",
-            "details": {
-                "error": f"Unable to run restore script: {str(e)}"
-            }
-        }
-        logger.error(f"{action_id}: Unable to run restore script: {repr(e)}")
-        try:
-            utils.update_action_status(TBL, action_id, error_status)
-        except Exception as e2:
-            with open("ERROR.log", 'w') as out:
-                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
-                          f"After error '{repr(e)}'")
-        return
-
-    # TODO: Check success, fetch ID without needing to parse output text
-    try:
-        if b"completed successfully" not in restore_message:
-            raise ValueError(f"DERIVA restore failed: {restore_message}")
-        deriva_link = (restore_message.split(b"Restore of catalog")[-1]
-                                      .split(b"completed successfully")[0].strip())
-        deriva_id = int(deriva_link.split(b"/")[-1])
-        deriva_samples = f"https://{server}/chaise/recordset/#{deriva_id}/demo:Samples"
-    except Exception as e:
-        error_status = {
-            "status": "FAILED",
-            "details": {
-                "error": f"Restore script output parsing failed: {str(e)}"
-            }
-        }
-        logger.error(f"{action_id}: Restore script output parsing failed: {repr(e)}")
-        try:
-            utils.update_action_status(TBL, action_id, error_status)
-        except Exception as e2:
-            with open("ERROR.log", 'w') as out:
-                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
-                          f"After error '{repr(e)}'")
-        return
-
-    # Successful restore
-    logger.debug(f"{action_id}:Restore complete")
-    status = {
-        "status": "SUCCEEDED",
-        "details": {
-            "deriva_id": deriva_id,
-            "deriva_samples_link": deriva_samples,
-            "message": "DERIVA restore successful",
-            "error": False
-        }
-    }
-    try:
-        utils.update_action_status(TBL, action_id, status)
-    except Exception as e:
-        with open("ERROR.log", 'w') as out:
-            out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
-                      f"After success on ID '{deriva_id}'")
-    return
-
 
 def action_ingest(action_id, url, globus_ep=None, servername=None, dcc_id=None):
     # Download ingest BDBag
@@ -451,9 +305,6 @@ def action_ingest(action_id, url, globus_ep=None, servername=None, dcc_id=None):
     # Ingest into Deriva
     logger.debug(f"{action_id}: Ingesting into Deriva")
     try:
-        # TODO: Determine schema name from data
-        schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
-
         ingest_res = actions.deriva_ingest(servername, url, dcc_id=dcc_id, globus_ep=globus_ep,
                                            action_id=action_id)
         if not ingest_res["success"]:
@@ -467,6 +318,7 @@ def action_ingest(action_id, url, globus_ep=None, servername=None, dcc_id=None):
             return
         catalog_id = ingest_res["catalog_id"]
     except Exception as e:
+        logger.exception(e)
         error_status = {
             "status": "FAILED",
             "details": {

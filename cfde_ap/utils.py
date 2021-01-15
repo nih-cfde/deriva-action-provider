@@ -2,15 +2,11 @@ from copy import deepcopy
 import logging
 import os
 import shutil
-import urllib
 
-from bdbag import bdbag_api
 import boto3
 from boto3.dynamodb.conditions import Attr
 import bson  # For IDs
-import globus_sdk
 import mdf_toolbox
-import requests
 
 from cfde_ap import CONFIG
 from . import error as err
