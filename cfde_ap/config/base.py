@@ -14,6 +14,7 @@ BASE_CONFIG = {
     },
     "GLOBUS_AUD": "cfde_ap_demo",
     "GLOBUS_GROUP": "a437abe3-c9a4-11e9-b441-0efb3ba9a670",
+    "ALLOWED_GCS_HTTPS_HOSTS": r"https://[^/]*[.]data[.]globus[.]org/.*",
     "DATA_DIR": os.path.join(os.path.expanduser("~"), "deriva_data"),
     "DERIVA_SCHEMA_NAME": "CFDE",
     "TRANSFER_PING_INTERVAL": 60,  # Seconds

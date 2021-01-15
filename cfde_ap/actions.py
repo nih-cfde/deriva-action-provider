@@ -12,7 +12,7 @@ from cfde_deriva.submission import Submission
 logger = logging.getLogger(__name__)
 
 
-def deriva_ingest(servername, archive_url, dcc_id=None, globus_ep=None):
+def deriva_ingest(servername, archive_url, dcc_id=None, globus_ep=None, action_id=None):
     """Perform an ingest to DERIVA into a catalog, using the CfdeDataPackage.
 
     Arguments:
@@ -36,18 +36,24 @@ def deriva_ingest(servername, archive_url, dcc_id=None, globus_ep=None):
     submitting_user = get_webauthn_user()
 
     https_token = get_dependent_token(f'https://auth.globus.org/scopes/{globus_ep}/https')
-    # arguments dcc_id and archive_url would come from action provider
-    # and it would also have a different way to obtain a submission ID
-    submission_id = str(uuid.uuid3(uuid.NAMESPACE_URL, archive_url))
+    # the Globus action_id is used as the Submission id, this allows us to track submissions
+    # in Deriva back to an action.
+    submission_id = action_id
+    logger.info(f'Submitting new dataset into Deriva using submission id {submission_id}')
 
     # pre-flight check like action provider might want to do?
     # this is optional, implicitly happening again in Submission(...)
     registry.validate_dcc_id(dcc_id, submitting_user)
 
-    # Submission.content_path_root = CONFIG['DATA_DIR']
-    # run the actual submission work if we get this far
+    # The Header map protects from submitting our https_token to non-Globus URLs. This MUST
+    # match, otherwise the Submission() client will attempt to download the Globus GCS Auth
+    # login page instead. r"https://[^/]*[.]data[.]globus[.]org/.*" will match most GCS HTTP pages,
+    # but if a custom domain is used this MUST be updated to use that instead.
+    header_map = {
+        CONFIG['ALLOWED_GCS_HTTPS_HOSTS']: {"Authorization": f"Bearer {https_token}"}
+    }
     submission = Submission(server, registry, submission_id, dcc_id, archive_url, submitting_user,
-                            globus_https_token=https_token)
+                            archive_headers_map=header_map)
     submission.ingest()
 
     md = registry.get_datapackage(submission_id)

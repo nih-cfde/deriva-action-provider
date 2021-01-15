@@ -27,6 +27,7 @@ app.url_map.strict_slashes = False
 # Logging setup
 logging.config.dictConfig({
     'version': 1,
+    'disable_existing_loggers': False,
     'formatters': {
         'basic': {
             'format': "[{asctime}] [{levelname}] {name}.{funcName}-{processName}: {message}",
@@ -51,7 +52,12 @@ logging.config.dictConfig({
     'loggers': {
         'cfde_ap': {'level': 'DEBUG', 'handlers': ['console', 'logfile']},
         'cfde_deriva': {'level': 'DEBUG', 'handlers': ['console', 'logfile']},
+        'bdbag': {'level': 'DEBUG', 'handlers': ['console', 'logfile']},
     },
+    # 'root': {
+    #     'level': 'DEBUG',
+    #     'handlers': ['console', 'logfile']
+    # },
 })
 logger = logging.getLogger(__name__)
 
@@ -268,8 +274,8 @@ def start_action(action_id, action_data):
     #       Currently assuming process manages itself
     # Restore Action
     if action_data["operation"] == "restore":
-        logger.info(f"{action_id}: Starting Deriva restore into "
-                    f"{action_data.get('catalog_id', 'new catalog')}")
+        logger.debug(f"{action_id}: Starting Deriva restore into "
+                     f"{action_data.get('catalog_id', 'new catalog')}")
         # Spawn new process
         args = (action_id, action_data["data_url"], action_data.get("server"),
                 action_data.get("catalog_id"))
@@ -448,7 +454,8 @@ def action_ingest(action_id, url, globus_ep=None, servername=None, dcc_id=None):
         # TODO: Determine schema name from data
         schema_name = CONFIG["DERIVA_SCHEMA_NAME"]
 
-        ingest_res = actions.deriva_ingest(servername, url, dcc_id=dcc_id, globus_ep=globus_ep)
+        ingest_res = actions.deriva_ingest(servername, url, dcc_id=dcc_id, globus_ep=globus_ep,
+                                           action_id=action_id)
         if not ingest_res["success"]:
             error_status = {
                 "status": "FAILED",
