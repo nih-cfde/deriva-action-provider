@@ -32,9 +32,11 @@ def cli():
     pass
 
 
-@cli.command()
+@cli.command(help="Deploy the latest flow definition in flow.py")
 @click.option("--service", default="dev")  # , hidden=True)
 def flow(service):
+    """Deploy the latest flow, and track the id in cfde_client_config. Old flows
+    are not automatically deleted, and are tracked in old_flows_filename"""
     flows_client = globus_automate_client.create_flows_client(native_app_id)
     serv = deriva_aps[service]
     client_config = load_client_config()
@@ -62,8 +64,9 @@ def flow(service):
     "https://pypi.org/pypi/cfde-submit/json"
 
 
-@cli.command()
+@cli.command(help="Deploy client-config for public usage")
 def client_config():
+    """De"""
     cli = fair_research_login.NativeClient(client_id=native_app_id)
     scope = "https://auth.globus.org/scopes/d1e360d2-3b83-4039-bd82-f38f5bf2c394/https"
     cli.login(requested_scopes=scope)
@@ -73,30 +76,6 @@ def client_config():
     put_res = requests.put(url, json=load_client_config(), headers=headers)
     put_res.raise_for_status()
     click.secho(f"Client Config Deployed: '{url}'", fg="green")
-
-
-@cli.command()
-def group():
-    """
-
-    """
-    cli = fair_research_login.NativeClient(client_id=native_app_id)
-    tks = cli.login(requested_scopes="urn:globus:auth:scope:groups.api.globus.org:all")
-    headers = {"Authorization": f"Bearer {tks['groups.api.globus.org']['access_token']}"}
-    url = ("https://groups.api.globus.org/v2/groups/a437abe3-c9a4-11e9-b441-0efb3ba9a670")
-    data = {
-        "add": [{
-            # CFDE Dev Action Provider
-            "identity_id": "21017803-059f-4a9b-b64c-051ab7c1d05d",
-            # nick@globus.org
-            # "identity_id": "3b843349-4d4d-4ef3-916d-2a465f9740a9",
-        }]
-    }
-    put_res = requests.post(url, json=data, headers=headers)
-    put_res.raise_for_status()
-    from pprint import pprint
-    pprint(put_res.json())
-    click.secho(f"Client ID Set to group.", fg="green")
 
 
 if __name__ == "__main__":
