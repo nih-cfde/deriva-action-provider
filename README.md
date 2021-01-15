@@ -24,6 +24,41 @@ KEYS = {
 * GLOBUS_SECRET -- The Confidential Client secret generated on developers.globus.org
 * AWS_KEY/SECRET -- CFDE AWS Credentials generated on AWS
     * NOTE: This MUST have permissions to read/write on DynamoDB Tables.
+    
+### Local Development
+
+With the KEYS above set, you can run the server locally with:
+
+    export FLASK_ENV=dev
+    export FLASK_APP=cfde_ap/api.py
+    flask run
+    
+The action provider can be tested with data by using the globus-automate tool
+to call the /run endpoint. This simulates the flow calling the DerivaIngest
+action. **Note**: The flow automatically copies data to the GCS endpoint, but
+calling the action provider directly will skip this step. You must ensure your
+test data is already on the GCS endpoint for your local server to pull it down.
+
+Given the following input test data test.json:
+
+```
+{
+  "data_url": "https://g-c7e94.f19a4.5898.data.globus.org/CFDE/data/KF_C2M2_submission.tgz",
+  "dcc_id": "cfde_registry_dcc:kidsfirst",
+  "globus_ep": "36530efa-a1e3-45dc-a6e7-9560a8e9ac49",
+  "operation": "ingest",
+  "test_sub": false
+}
+```
+
+The following can be submitted to your locally running server with:
+
+```
+globus-automate action run \
+--action-url http://localhost:5000 \
+--action-scope https://auth.globus.org/scopes/21017803-059f-4a9b-b64c-051ab7c1d05d/demo \
+--body test.json
+```
 
 ## Deployment
 
