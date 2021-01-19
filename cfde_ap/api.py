@@ -23,40 +23,7 @@ app.config.from_mapping(**CONFIG)
 app.url_map.strict_slashes = False
 
 # Logging setup
-logging.config.dictConfig({
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'basic': {
-            'format': "[{asctime}] [{levelname}] {name}.{funcName}-{processName}: {message}",
-            'style': '{',
-            'datefmt': "%Y-%m-%d %H:%M:%S",
-        }
-    },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'level': CONFIG["LOG_LEVEL"],
-            'formatter': 'basic',
-        },
-        'logfile': {
-            'class': 'logging.FileHandler',
-            'level': CONFIG["LOG_LEVEL"],
-            'mode': 'a',
-            'filename': CONFIG["API_LOG_FILE"],
-            'formatter': 'basic',
-        }
-    },
-    'loggers': {
-        'cfde_ap': {'level': 'DEBUG', 'handlers': ['console', 'logfile']},
-        'cfde_deriva': {'level': 'DEBUG', 'handlers': ['console', 'logfile']},
-        'bdbag': {'level': 'DEBUG', 'handlers': ['console', 'logfile']},
-    },
-    # 'root': {
-    #     'level': 'DEBUG',
-    #     'handlers': ['console', 'logfile']
-    # },
-})
+logging.config.dictConfig(CONFIG["LOGGING"])
 logger = logging.getLogger(__name__)
 
 logger.info("\n\n==========CFDE Action Provider started==========\n")
