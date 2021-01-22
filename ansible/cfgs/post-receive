@@ -1,0 +1,24 @@
+#!/bin/bash
+# Git Post-receive hook.
+# Install in .git/hooks/post-receive
+# This script is run each time the service is 'pushed' to. It ensures whatever
+# branch was pushed is checked out, and additionally restarts the system
+# service to deploy the latest code.
+PROJECT=/home/ubuntu/deriva-action-provider
+PYTHON=/ubuntu/miniconda3/envs/ap_dev/bin/python
+
+while read oldrev newrev ref
+do
+    branch=`echo $ref | cut -d/ -f3`
+    GIT_WORK_TREE="$PROJECT" git checkout -f $branch
+done
+
+export CONDA_DEFAULT_ENV=ap_dev
+
+# Restart the service to run the code on the newly pushed branch
+# NOTE: the user that runs the AP has sudo privs, this isn't the best from a
+# security perspective. An alternative would be creating a new unprivileged
+# user to run the service. WSGI services like uWSGI will auto-restart if there
+# are code changes by touching the vassal.ini file, which can be a replacement
+# for the line below.
+sudo systemctl restart deriva-action-provider
