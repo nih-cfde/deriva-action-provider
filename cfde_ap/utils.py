@@ -2,15 +2,11 @@ from copy import deepcopy
 import logging
 import os
 import shutil
-import urllib
 
-from bdbag import bdbag_api
 import boto3
 from boto3.dynamodb.conditions import Attr
 import bson  # For IDs
-import globus_sdk
 import mdf_toolbox
-import requests
 
 from cfde_ap import CONFIG
 from . import error as err
@@ -54,8 +50,6 @@ def clean_environment():
 
 def initialize_dmo_table(table_name, schema=DMO_SCHEMA, client=DMO_CLIENT):
     """Init a table in DynamoDB, by default the DMO_TABLE with DMO_SCHEMA.
-    Currently not intended to be called in a script;
-    table creation is only necessary once per table.
 
     Arguments:
         table_name (str): The name for the DynamoDB table.
@@ -71,11 +65,11 @@ def initialize_dmo_table(table_name, schema=DMO_SCHEMA, client=DMO_CLIENT):
     """
     # Table should not be active already
     try:
-        get_dmo_table(table_name, client)
+        table = get_dmo_table(table_name, client)
+        logger.debug(f'DynamoDB table already created "{CONFIG["DYNAMO_TABLE"]}"')
+        return table
     except err.NotFound:
         pass
-    else:
-        raise err.InvalidState("Table already created")
 
     schema = deepcopy(DMO_SCHEMA)
     schema["TableName"] = table_name
@@ -83,6 +77,7 @@ def initialize_dmo_table(table_name, schema=DMO_SCHEMA, client=DMO_CLIENT):
     try:
         new_table = client.create_table(**schema)
         new_table.wait_until_exists()
+        logger.info(f'Successfully created DynamoDB table: "{table_name}"')
     except client.meta.client.exceptions.ResourceInUseException:
         raise err.InvalidState("Table concurrently created")
     except Exception as e:
@@ -349,98 +344,6 @@ def translate_status(raw_status):
     """
     # TODO
     # DynamoDB stores int as Decimal, which isn't JSON-friendly
-    if raw_status.get("details", {}).get("deriva_id"):
-        raw_status["details"]["deriva_id"] = int(raw_status["details"]["deriva_id"])
+    # if raw_status.get("details", {}).get("deriva_id"):
+    #     raw_status["details"]["deriva_id"] = int(raw_status["details"]["deriva_id"])
     return raw_status
-
-
-def get_deriva_token():
-    # TODO: When decision is made about user auth vs. conf client auth, implement.
-    #       Currently using personal refresh token for scope.
-    #       Refresh token will expire in six months(?)
-    #       Date last generated: 9-26-2019
-
-    return globus_sdk.RefreshTokenAuthorizer(
-                        refresh_token=CONFIG["TEMP_REFRESH_TOKEN"],
-                        auth_client=globus_sdk.NativeAppAuthClient(CONFIG["GLOBUS_NATIVE_APP"])
-           ).access_token
-
-
-def _generate_new_deriva_token():
-    # Generate new Refresh Token to be used in get_deriva_token()
-    native_client = globus_sdk.NativeAppAuthClient(CONFIG["GLOBUS_NATIVE_APP"])
-    native_flow = native_client.oauth2_start_flow(
-                                    requested_scopes=("https://auth.globus.org/scopes/demo."
-                                                      "derivacloud.org/deriva_all"),
-                                    refresh_tokens=True)
-    code = input(f"Auth at '{native_flow.get_authorize_url()}' and paste code:\n")
-    tokens = native_flow.exchange_code_for_tokens(code)
-    return tokens["refresh_token"]
-
-
-def download_data(location, local_path):
-    """Download data from a remote host to the configured machine.
-    (Many sources to one destination)
-
-    Arguments:
-        location (str): The location of the data.
-        local_path (str): The path to the local storage location.
-
-    Returns:
-        dict: success (bool): True on success, False on failure.
-    """
-    filename = None
-    # If the local_path is a file and not a directory, use the directory
-    if ((os.path.exists(local_path) and not os.path.isdir(local_path))
-            or (not os.path.exists(local_path) and local_path[-1] != "/")):
-        # Save the filename for later
-        filename = os.path.basename(local_path)
-        local_path = os.path.dirname(local_path) + "/"
-
-    os.makedirs(local_path, exist_ok=True)
-
-    loc_info = urllib.parse.urlparse(location)
-    # HTTP(S)
-    if loc_info.scheme.startswith("http"):
-        # Get default filename and extension
-        http_filename = os.path.basename(loc_info.path)
-        if not http_filename:
-            http_filename = "archive"
-        ext = os.path.splitext(http_filename)[1]
-        if not ext:
-            ext = ".archive"
-
-        # Fetch file
-        with requests.get(location, stream=True) as res:
-            if res.status_code >= 300:
-                logger.error(f"Error {res.status_code} downloading file '{location}': "
-                             f"{res.content}")
-                raise IOError("File download failed: {}".format(res.content))
-            else:
-                logger.debug(f"Downloaded file {location} with status code {res.status_code}")
-            # Get filename from header if present
-            con_disp = res.headers.get("Content-Disposition", "")
-            filename_start = con_disp.find("filename=")
-            if filename_start >= 0:
-                filename_end = con_disp.find(";", filename_start)
-                if filename_end < 0:
-                    filename_end = None
-                http_filename = con_disp[filename_start+len("filename="):filename_end]
-                http_filename = http_filename.strip("\"'; ")
-
-            # Create path for file
-            archive_path = os.path.join(local_path, filename or http_filename)
-            # Download and save file
-            with open(archive_path, 'wb') as out:
-                shutil.copyfileobj(res.raw, out)
-            logger.debug("Saved HTTP file: {}".format(archive_path))
-
-        # Assume data is BDBag, extract
-        bag_path = bdbag_api.extract_bag(archive_path, local_path)
-    # Not supported
-    else:
-        # Nothing to do
-        raise IOError("Invalid data location: '{}' is not a recognized protocol "
-                      "(from {}).".format(loc_info.scheme, str(location)))
-    # Return path to bag
-    return bag_path

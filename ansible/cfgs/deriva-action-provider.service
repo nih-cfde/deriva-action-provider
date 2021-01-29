@@ -1,0 +1,24 @@
+# Deriva Action Provider System Service
+# Install in /etc/systemd/system/deriva-action-provider.service
+# Remember to run the following if you change this:
+# systemctl daemon-reload
+
+[Unit]
+Description=Deriva Action Provider
+After=syslog.target
+
+[Service]
+ExecStart=/home/ubuntu/miniconda3/envs/ap_dev/bin/gunicorn --bind 127.0.0.1:5000 cfde_ap.api:app --timeout 31 --graceful-timeout 62
+# ExecStart=/home/ubuntu/deriva-action-provider/venv/bin/uwsgi --http :5000 --module cfde_ap.api:app --enable-threads --processes 4 --threads 2 --chdir /home/ubuntu/deriva-action-provider
+Environment="FLASK_ENV=dev"
+RuntimeDirectory=/home/ubuntu/deriva-action-provider/
+User=ubuntu
+Group=ubuntu
+Restart=always
+KillSignal=SIGHUP
+Type=notify
+StandardError=syslog
+NotifyAccess=all
+
+[Install]
+WantedBy=multi-user.target

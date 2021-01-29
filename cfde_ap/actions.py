@@ -1,20 +1,16 @@
-import json
 import logging
-import os
-import tempfile
-
-from cfde_deriva.datapackage import CfdeDataPackage
 from deriva.core import DerivaServer
-import requests
 
 from cfde_ap import CONFIG
-from .utils import get_deriva_token
-
+from cfde_ap.auth import get_dependent_token, get_webauthn_user
+from cfde_deriva.registry import Registry
+from cfde_deriva.submission import Submission
 
 logger = logging.getLogger(__name__)
 
 
-def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
+def deriva_ingest(servername, archive_url, deriva_webauthn_user,
+                  dcc_id=None, globus_ep=None, action_id=None):
     """Perform an ingest to DERIVA into a catalog, using the CfdeDataPackage.
 
     Arguments:
@@ -30,101 +26,36 @@ def deriva_ingest(servername, data_json_file, catalog_id=None, acls=None):
             success (bool): True when the ingest was successful.
             catalog_id (str): The catalog's ID.
     """
-    # Format credentials in DerivaServer-expected format
-    creds = {
-        "bearer-token": get_deriva_token()
+    credential = {
+        "bearer-token": get_dependent_token(CONFIG["DEPENDENT_SCOPES"]["deriva_all"])
     }
-    # Get server object
-    server = DerivaServer("https", servername, creds)
+    registry = Registry('https', servername, credentials=credential)
+    server = DerivaServer('https', servername, credential)
 
-    # If ingesting into existing catalog, don't need to provision with schema
-    if catalog_id:
-        catalog_id = str(int(catalog_id))
-        catalog = server.connect_ermrest(catalog_id)
-    # Otherwise, we need to fetch the latest model for provisioning
-    else:
-        canon_schema = requests.get(CONFIG["DERIVA_SCHEMA_LOCATION"]).json()
-        with tempfile.TemporaryDirectory() as schema_dir:
-            schema_path = os.path.join(schema_dir, "model.json")
-            with open(schema_path, 'w') as f:
-                json.dump(canon_schema, f)
+    https_token = get_dependent_token(f'https://auth.globus.org/scopes/{globus_ep}/https')
+    # the Globus action_id is used as the Submission id, this allows us to track submissions
+    # in Deriva back to an action.
+    submission_id = action_id
+    logger.info(f'Submitting new dataset into Deriva using submission id {submission_id}')
 
-            provisional_datapack = CfdeDataPackage(schema_path, verbose=False)
-            catalog = server.create_ermrest_catalog()
-            provisional_datapack.set_catalog(catalog)
-            provisional_datapack.provision()
+    # pre-flight check like action provider might want to do?
+    # this is optional, implicitly happening again in Submission(...)
+    registry.validate_dcc_id(dcc_id, deriva_webauthn_user)
 
-    # Now we create a datapackage to ingest the actual data
-    datapack = CfdeDataPackage(data_json_file, verbose=False)
-    # Catalog was created previously
-    datapack.set_catalog(catalog)
+    # The Header map protects from submitting our https_token to non-Globus URLs. This MUST
+    # match, otherwise the Submission() client will attempt to download the Globus GCS Auth
+    # login page instead. r"https://[^/]*[.]data[.]globus[.]org/.*" will match most GCS HTTP pages,
+    # but if a custom domain is used this MUST be updated to use that instead.
+    header_map = {
+        CONFIG['ALLOWED_GCS_HTTPS_HOSTS']: {"Authorization": f"Bearer {https_token}"}
+    }
+    submission = Submission(server, registry, submission_id, dcc_id, archive_url, deriva_webauthn_user,
+                            archive_headers_map=header_map)
+    submission.ingest()
 
-    # Apply custom config (if possible - may fail if non-canon schema)
-    try:
-        datapack.apply_custom_config()
-    # Using non-canon schema is not failure unless Deriva rejects data
-    except Exception:
-        logger.info(f"Custom config skipped for {catalog.catalog.id}")
-
-    # Apply ACLs - either supplied or CfdeDataPackage default
-    # Defaults are set in .apply_custom_config(), which can fail
-    if acls is None:
-        acls = dict(CfdeDataPackage.catalog_acls)
-    # Ensure catalog owner still in ACLs - DERIVA forbids otherwise
-    acls['owner'] = list(set(acls['owner']).union(datapack.cat_model_root.acls['owner']))
-    # Apply acls
-    datapack.cat_model_root.acls.update(acls)
-    # Set ERMrest access
-    datapack.cat_model_root.table('public', 'ERMrest_Client').acls\
-            .update(datapack.ermrestclient_acls)
-    datapack.cat_model_root.table('public', 'ERMrest_Group').acls\
-            .update(datapack.ermrestclient_acls)
-    # Submit changes to server
-    datapack.cat_model_root.apply()
-
-    # Load data from files into DERIVA
-    # This is the step that will fail if the data are incorrect
-    datapack.load_data_files()
-
+    md = registry.get_datapackage(submission_id)
     return {
         "success": True,
-        "catalog_id": catalog.catalog_id
-    }
-
-
-def deriva_modify(servername, catalog_id, acls=None):
-    """Modify a DERIVA catalog's options using the CfdeDataPackage.
-    Currently limited to ACL changes only.
-
-    Arguments:
-        servername (str): The name of the DERIVA server
-        catalog_id (str or int): The ID of the catalog to change. The catalog must exist.
-        acls (dict): The Access Control Lists to set.
-
-    Returns:
-        dict: The results of the update.
-            success (bool): True if the ACLs were successfully changed.
-    """
-    catalog_id = str(int(catalog_id))
-    # Format credentials in DerivaServer-expected format
-    creds = {
-        "bearer-token": get_deriva_token()
-    }
-    # Get the catalog model object to modify
-    server = DerivaServer("https", servername, creds)
-    catalog = server.connect_ermrest(catalog_id)
-    cat_model = catalog.getCatalogModel()
-
-    # If modifying ACL, set ACL
-    if acls:
-        # Ensure catalog owner still in ACLs - DERIVA forbids otherwise
-        acls['owner'] = list(set(acls['owner']).union(cat_model.acls['owner']))
-        # Apply acls
-        cat_model.acls.update(acls)
-
-    # Submit changes to server
-    cat_model.apply()
-
-    return {
-        "success": True
+        "catalog_id": submission_id,
+        "catalog_url": md['review_browse_url']
     }
