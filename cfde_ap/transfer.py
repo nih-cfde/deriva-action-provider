@@ -2,7 +2,7 @@ import os
 import logging
 import globus_sdk
 import urllib
-import time
+import datetime
 
 from cfde_ap.auth import get_app_token
 from cfde_ap import CONFIG
@@ -26,7 +26,7 @@ def move_to_protected_location(url, action_id, dcc_id):
     create_dir_if_not_exists(tc, dcc_dir)
 
     _, old_ext = os.path.splitext(purl.path)
-    new_filename = f'{int(time.time())}-{action_id}{old_ext}'
+    new_filename = f'{int(datetime.datetime.now().isoformat())}-{action_id}{old_ext}'
     new_dataset_path = os.path.join(dcc_dir, new_filename)
     logger.debug(f'Renaming dataset "{purl.path}" to "{new_dataset_path}"')
     tc.operation_rename(CONFIG["GCS_ENDPOINT"], purl.path, new_dataset_path)
