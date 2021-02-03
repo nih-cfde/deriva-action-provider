@@ -8,8 +8,12 @@ BASE_CONFIG = {
     "DEPENDENT_SCOPES": {
         "deriva_all": {
             "https://auth.globus.org/scopes/app.nih-cfde.org/deriva_all"
+        },
+        "transfer": {
+            "urn:globus:auth:scope:transfer.api.globus.org:all",
         }
     },
+    "LONG_TERM_STORAGE": '/CFDE/public/',
     "GLOBUS_AUD": "cfde_ap_demo",
     "GLOBUS_GROUP": "a437abe3-c9a4-11e9-b441-0efb3ba9a670",
     "ALLOWED_GCS_HTTPS_HOSTS": r"https://[^/]*[.]data[.]globus[.]org/.*",
