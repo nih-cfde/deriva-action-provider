@@ -36,6 +36,6 @@ else:
 # These should fail on portal startup if they don't exist
 if not os.path.exists(CONFIG["DATA_DIR"]):
     raise EnvironmentError(f"DATA_DIR '{CONFIG['DATA_DIR']}' does not exist.")
-if not os.path.exists(CONFIG["DERIVA_SCHEMA_LOCATION"]):
-    raise EnvironmentError(f"DERIVA_SCHEMA_LOCATION '{CONFIG['DERIVA_SCHEMA_LOCATION']}' "
-                           f"does not exist.")
+# if not os.path.exists(CONFIG["DERIVA_SCHEMA_LOCATION"]):
+#     raise EnvironmentError(f"DERIVA_SCHEMA_LOCATION '{CONFIG['DERIVA_SCHEMA_LOCATION']}' "
+#                            f"does not exist.")

@@ -382,9 +382,9 @@ full_submission_flow_def = {
         }
     },
     "description": ("Run the CFDE submission flow."),
-    "runnable_by": ["urn:globus:groups:id:a437abe3-c9a4-11e9-b441-0efb3ba9a670"],  # CFDE DERIVA Demo
+    "runnable_by": ["urn:globus:groups:id:5f742b05-9210-11e9-aa27-0e4b2da78b7a"],  # CFDE DERIVA Demo
     "synchronous": False,
     "title": "CFDE Submission",
     "types": ["Action", "Choice"],
-    "visible_to": ["urn:globus:groups:id:a437abe3-c9a4-11e9-b441-0efb3ba9a670"]  # CFDE DERIVA Demo
+    "visible_to": ["urn:globus:groups:id:5f742b05-9210-11e9-aa27-0e4b2da78b7a"]  # CFDE DERIVA Demo
 }
