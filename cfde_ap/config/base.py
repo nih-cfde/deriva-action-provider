@@ -21,6 +21,7 @@ BASE_CONFIG = {
     "DERIVA_SCHEMA_NAME": "CFDE",
     "TRANSFER_PING_INTERVAL": 60,  # Seconds
     "TRANSFER_DEADLINE": 24 * 60 * 60,  # 1 day, in seconds
+    "INGEST_DEADLINE": 60 * 60,  # One hour in seconds
     "LOGGING": {
         "version": 1,
         "disable_existing_loggers": False,
