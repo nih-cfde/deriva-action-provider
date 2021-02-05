@@ -9,7 +9,7 @@ from cfde_ap.config import CONFIG
 logger = logging.getLogger(__name__)
 
 
-def get_dependent_token(scope):
+def get_app_token(scope):
     cc_app = globus_sdk.ConfidentialAppAuthClient(
         CONFIG["GLOBUS_CC_APP"],
         CONFIG["GLOBUS_SECRET"],

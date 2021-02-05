@@ -2,10 +2,10 @@ from copy import deepcopy
 import logging
 import os
 import shutil
+import uuid
 
 import boto3
 from boto3.dynamodb.conditions import Attr
-import bson  # For IDs
 import mdf_toolbox
 
 from cfde_ap import CONFIG
@@ -118,27 +118,6 @@ def get_dmo_table(table_name, client=DMO_CLIENT):
         return table
 
 
-def generate_action_id(table_name):
-    """Generate a valid action_id, unique to the given table.
-
-    Arguments:
-        table_name (str): The name of the table to check uniqueness against.
-
-    Returns:
-        str: The action_id.
-    """
-    # TODO: Different ID generation logic?
-    action_id = str(bson.ObjectId())
-    while True:
-        try:
-            read_action_status(table_name, action_id)
-        except err.NotFound:
-            break
-        else:
-            action_id = str(bson.ObjectId())
-    return action_id
-
-
 def create_action_status(table_name, action_status):
     """Create action entry in status database (DynamoDB).
 
@@ -154,7 +133,7 @@ def create_action_status(table_name, action_status):
     table = get_dmo_table(table_name)
 
     # TODO: Add default status information
-    action_id = generate_action_id(table_name)
+    action_id = str(uuid.uuid1())
     action_status["action_id"] = action_id
     if not action_status.get("details"):
         action_status["details"] = {

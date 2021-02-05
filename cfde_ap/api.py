@@ -14,7 +14,7 @@ from openapi_core.wrappers.flask import FlaskOpenAPIResponse, FlaskOpenAPIReques
 
 import cfde_ap.auth
 from cfde_ap import CONFIG
-from . import actions, error as err, utils
+from . import actions, error as err, utils, transfer
 
 
 # Flask setup
@@ -270,6 +270,8 @@ def action_ingest(action_id, url, deriva_webauthn_user, globus_ep=None, serverna
 
     if not servername:
         servername = CONFIG["DEFAULT_SERVER_NAME"]
+
+    url = transfer.move_to_protected_location(url, action_id, dcc_id)
 
     # Ingest into Deriva
     logger.debug(f"{action_id}: Ingesting into Deriva")

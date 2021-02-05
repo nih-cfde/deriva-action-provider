@@ -2,7 +2,7 @@ import logging
 from deriva.core import DerivaServer
 
 from cfde_ap import CONFIG
-from cfde_ap.auth import get_dependent_token, get_webauthn_user
+from cfde_ap.auth import get_app_token, get_webauthn_user
 from cfde_deriva.registry import Registry
 from cfde_deriva.submission import Submission
 
@@ -27,12 +27,11 @@ def deriva_ingest(servername, archive_url, deriva_webauthn_user,
             catalog_id (str): The catalog's ID.
     """
     credential = {
-        "bearer-token": get_dependent_token(CONFIG["DEPENDENT_SCOPES"]["deriva_all"])
+        "bearer-token": get_app_token(CONFIG["DEPENDENT_SCOPES"]["deriva_all"])
     }
     registry = Registry('https', servername, credentials=credential)
     server = DerivaServer('https', servername, credential)
 
-    https_token = get_dependent_token(f'https://auth.globus.org/scopes/{globus_ep}/https')
     # the Globus action_id is used as the Submission id, this allows us to track submissions
     # in Deriva back to an action.
     submission_id = action_id
@@ -46,6 +45,7 @@ def deriva_ingest(servername, archive_url, deriva_webauthn_user,
     # match, otherwise the Submission() client will attempt to download the Globus GCS Auth
     # login page instead. r"https://[^/]*[.]data[.]globus[.]org/.*" will match most GCS HTTP pages,
     # but if a custom domain is used this MUST be updated to use that instead.
+    https_token = get_app_token(f'https://auth.globus.org/scopes/{globus_ep}/https')
     header_map = {
         CONFIG['ALLOWED_GCS_HTTPS_HOSTS']: {"Authorization": f"Bearer {https_token}"}
     }
