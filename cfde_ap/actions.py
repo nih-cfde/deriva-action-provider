@@ -2,7 +2,7 @@ import logging
 from deriva.core import DerivaServer
 
 from cfde_ap import CONFIG
-from cfde_ap.auth import get_app_token, get_webauthn_user
+from cfde_ap.auth import get_app_token
 from cfde_deriva.registry import Registry
 from cfde_deriva.submission import Submission
 
@@ -49,9 +49,15 @@ def deriva_ingest(servername, archive_url, deriva_webauthn_user,
     header_map = {
         CONFIG['ALLOWED_GCS_HTTPS_HOSTS']: {"Authorization": f"Bearer {https_token}"}
     }
-    submission = Submission(server, registry, submission_id, dcc_id, archive_url, deriva_webauthn_user,
-                            archive_headers_map=header_map)
-    submission.ingest()
+    try:
+        submission = Submission(server, registry, submission_id, dcc_id, archive_url,
+                                deriva_webauthn_user, archive_headers_map=header_map)
+        submission.ingest()
+    except Exception:
+        # Report the error to Deriva, then raise again to mark the Automate action as a failure.
+        Submission.report_external_ops_error(registry, action_id,
+                                             "Submission raised an error during ingest")
+        raise
 
     md = registry.get_datapackage(submission_id)
     return {
