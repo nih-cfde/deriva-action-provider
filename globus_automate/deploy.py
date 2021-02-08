@@ -11,11 +11,10 @@ from cfde_ap.auth import get_app_token
 from cfde_ap import CONFIG as CFDE_CONFIG
 from cfde_deriva.registry import Registry
 from flow import full_submission_flow_def
-from urllib.parse import urlparse
 
 native_app_id = "417301b1-5101-456a-8a27-423e71a2ae26"  # Premade native app ID
 deriva_aps = {
-    "dev": "https://app-dev.nih-cfde.org/",
+    "dev": "https://ap-dev.nih-cfde.org/",
     "staging": "https://ap-staging.nih-cfde.org/",
     "prod": "https://ap.nih-cfde.org/"
 }
@@ -47,10 +46,10 @@ def flow(service):
     serv = deriva_aps[service]
     client_config = load_client_config()
     full_submission_flow_def["definition"]["States"]["DerivaIngest"]["ActionUrl"] = serv
-    hostname = urlparse(deriva_aps[service]).netloc
+    deriva_server = CFDE_CONFIG['DEFAULT_SERVER_NAME']
 
     globus_urns = list()
-    submitters = get_groups(hostname)
+    submitters = get_groups(deriva_server)
     for submitter in submitters:
         dcc = submitter['dcc']
         dcc_name = dcc.split(':')[-1]
