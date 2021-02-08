@@ -1,31 +1,37 @@
-import globus_automate_client
+import click
 import collections
-import requests
 import datetime
 import fair_research_login
+import globus_automate_client
+import globus_sdk
 import json
-import time
-import pprint
-from deriva.core import DerivaServer
 import os
-
-import click
+import requests
+from cfde_ap.auth import get_app_token
+from cfde_ap import CONFIG as CFDE_CONFIG
+from cfde_deriva.registry import Registry
 from flow import full_submission_flow_def
+from urllib.parse import urlparse
 
 native_app_id = "417301b1-5101-456a-8a27-423e71a2ae26"  # Premade native app ID
 deriva_aps = {
-    "dev": "https://ap-dev.nih-cfde.org/",
+    "dev": "https://app-dev.nih-cfde.org/",
     "staging": "https://ap-staging.nih-cfde.org/",
     "prod": "https://ap.nih-cfde.org/"
 }
-client_config_filename = os.path.join(os.path.dirname(__file__),
-                                      "cfde_client_config.json")
+client_config_filename = os.path.join(os.path.dirname(__file__), "cfde_client_config.json")
 old_flows_filename = os.path.join(os.path.dirname(__file__), "old_flows.txt")
+DERIVA_SCOPE = 'https://auth.globus.org/scopes/app.nih-cfde.org/deriva_all'
+TRANSFER_SCOPE = 'urn:globus:auth:scope:transfer.api.globus.org:all'
+CFDE_NATIVE_APP = '417301b1-5101-456a-8a27-423e71a2ae26'
+nc = fair_research_login.NativeClient(client_id=CFDE_NATIVE_APP)
+nc.login(requested_scopes=[DERIVA_SCOPE, TRANSFER_SCOPE])
 
 
 def load_client_config():
     with open(client_config_filename) as f:
         return json.JSONDecoder(object_pairs_hook=collections.OrderedDict).decode(f.read())
+
 
 @click.group()
 def cli():
@@ -41,12 +47,25 @@ def flow(service):
     serv = deriva_aps[service]
     client_config = load_client_config()
     full_submission_flow_def["definition"]["States"]["DerivaIngest"]["ActionUrl"] = serv
+    hostname = urlparse(deriva_aps[service]).netloc
+
+    globus_urns = list()
+    submitters = get_groups(hostname)
+    for submitter in submitters:
+        dcc = submitter['dcc']
+        dcc_name = dcc.split(':')[-1]
+        for group in submitter['groups']:
+            urn = f"urn:globus:groups:id:{group['id']}"
+            globus_urns.append(urn)
+            create_dir_if_not_exists(dcc_name, group['id'])
+    globus_urns = list(set(globus_urns))
+
     full_flow_deploy_res = flows_client.deploy_flow(
         flow_definition=full_submission_flow_def["definition"],
         title=full_submission_flow_def["title"],
         description=full_submission_flow_def["description"],
-        visible_to=full_submission_flow_def["visible_to"],
-        runnable_by=full_submission_flow_def["runnable_by"],
+        visible_to=globus_urns,
+        runnable_by=globus_urns,
     )
     click.secho(f"[{service}] Flow Deployed: {full_flow_deploy_res['id']}", fg="green")
 
@@ -76,6 +95,41 @@ def client_config():
     put_res = requests.put(url, json=load_client_config(), headers=headers)
     put_res.raise_for_status()
     click.secho(f"Client Config Deployed: '{url}'", fg="green")
+
+
+def get_groups(servername):
+    credentials = {
+        "bearer-token": nc.load_tokens_by_scope()[DERIVA_SCOPE]['access_token']
+    }
+    registry = Registry('https', servername, credentials=credentials)
+    groups = registry.get_groups_by_dcc_role(role_id='cfde_registry_grp_role:submitter')
+    return groups
+
+
+def create_dir_if_not_exists(dcc_name, gid):
+    transfer_token = get_app_token(CFDE_CONFIG["DEPENDENT_SCOPES"]['transfer'])
+    auth = globus_sdk.AccessTokenAuthorizer(transfer_token)
+    transfer_client = globus_sdk.TransferClient(authorizer=auth)
+    dir_path = os.path.join(CFDE_CONFIG["LONG_TERM_STORAGE"], dcc_name) + "/"
+    rule = {'DATA_TYPE': 'access',
+            'path': dir_path,
+            'permissions': 'rw',
+            'principal': gid,
+            'principal_type': 'group',
+            'role_id': None,
+            'role_type': None}
+
+    try:
+        transfer_client.operation_ls(CFDE_CONFIG["GCS_ENDPOINT"], path=dir_path)
+        create_dir = False
+    except globus_sdk.exc.TransferAPIError as tapie:
+        if tapie.code != "ClientError.NotFound":
+            raise
+        create_dir = True
+
+    if create_dir:
+        transfer_client.operation_mkdir(CFDE_CONFIG["GCS_ENDPOINT"], path=dir_path)
+        transfer_client.add_endpoint_acl_rule(CFDE_CONFIG['GCS_ENDPOINT'], rule)
 
 
 if __name__ == "__main__":
