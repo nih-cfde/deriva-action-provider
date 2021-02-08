@@ -29,7 +29,7 @@
             "failure_step": "FailureState",
             "error_step": "ErrorState",
             "cfde_ep_id": "36530efa-a1e3-45dc-a6e7-9560a8e9ac49",
-            "cfde_ep_path": "/CFDE/data/",
+            "cfde_ep_path": "/CFDE/public/",
             "cfde_ep_url": "https://g-c7e94.f19a4.5898.data.globus.org"
         }
     },
