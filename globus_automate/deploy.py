@@ -1,5 +1,6 @@
 import click
 import collections
+import copy
 import datetime
 import fair_research_login
 import globus_automate_client
@@ -63,8 +64,8 @@ def flow(service):
             globus_urns.append(urn)
             group_dir = os.path.join(CFDE_CONFIG["LONG_TERM_STORAGE"], dcc_name) + "/"
             create_dir(group_dir)
-            create_acl(group_dir, gid, "rw")
-            create_acl("/CFDE/data/", gid, "rw")
+            create_acl(group_dir, gid, "r")
+            create_acl("/CFDE/data/", gid, "w")
 
     globus_urns = list(set(globus_urns))
     full_flow_deploy_res = flows_client.deploy_flow(
@@ -135,7 +136,10 @@ def create_acl(path, group, permissions):
 
     for existing_rule in existing_rules:
         existing_rule.pop("id")
-        if existing_rule == rule:
+        existing_rule.pop("permissions")
+        rule_copy = copy.deepcopy(rule)
+        rule_copy.pop("permissions")
+        if existing_rule == rule_copy:
             return
 
     return transfer_client.add_endpoint_acl_rule(endpoint, rule)
