@@ -63,8 +63,8 @@ def flow(service):
             globus_urns.append(urn)
             group_dir = os.path.join(CFDE_CONFIG["LONG_TERM_STORAGE"], dcc_name) + "/"
             create_dir(group_dir)
-            create_acl(group_dir, gid, "rw")
-            create_acl("/CFDE/data/", gid, "rw")
+            create_acl(group_dir, gid, "r")
+            create_acl("/CFDE/data/", gid, "w")
 
     globus_urns = list(set(globus_urns))
     full_flow_deploy_res = flows_client.deploy_flow(
