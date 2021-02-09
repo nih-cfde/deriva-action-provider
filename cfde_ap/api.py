@@ -11,6 +11,8 @@ from globus_action_provider_tools.validation import (
 from isodate import duration_isoformat, parse_duration, parse_datetime
 import jsonschema
 from openapi_core.wrappers.flask import FlaskOpenAPIResponse, FlaskOpenAPIRequest
+from cfde_deriva.registry import Registry
+from cfde_deriva.submission import Submission
 
 import cfde_ap.auth
 from cfde_ap import CONFIG
@@ -136,6 +138,7 @@ def run():
         job = {
             # Start job as ACTIVE - no "waiting" status
             "status": "ACTIVE",
+            "date_started": datetime.now(tz=timezone.utc).isoformat(),
             # Default these to the principals of whoever is running this action:
             "manage_by": request.auth.identities,
             "monitor_by": request.auth.identities,
@@ -188,6 +191,26 @@ def status(action_id):
     status = utils.read_action_status(TBL, action_id)
     if not request.auth.check_authorization(status["monitor_by"]):
         raise err.NotAuthorized("You cannot view the status of action {}".format(action_id))
+    # Check deadline
+    started = datetime.fromisoformat(status["date_started"])
+    time_allotted = timedelta(seconds=CONFIG["INGEST_DEADLINE"])
+    deadline = started + time_allotted
+    timed_out = datetime.now(tz=timezone.utc) > deadline
+    if timed_out:
+        logger.warning(f"Action {action_id} timed out for unknown reason!")
+        status["status"] = "FAILED"
+        status["details"]["message"] = ("Submission timed out before it could complete. "
+                                        "Check with your administrator for more details")
+        try:
+            credential = {
+                "bearer-token": cfde_ap.auth.get_app_token(CONFIG["DEPENDENT_SCOPES"]["deriva_all"])
+            }
+            registry = Registry('https', CONFIG["DEFAULT_SERVER_NAME"], credentials=credential)
+            Submission.report_external_ops_error(registry, action_id,
+                                                 "Submission failed to ingest (timeout)")
+        except Exception as e:
+            # Something terrible happened when registering an error with Deriva
+            logger.exception(e)
     return jsonify(utils.translate_status(status))
 
 
