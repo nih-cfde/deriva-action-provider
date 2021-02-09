@@ -18,6 +18,7 @@ deriva_aps = {
     "staging": "https://ap-staging.nih-cfde.org/",
     "prod": "https://ap.nih-cfde.org/"
 }
+
 client_config_filename = os.path.join(os.path.dirname(__file__), "cfde_client_config.json")
 old_flows_filename = os.path.join(os.path.dirname(__file__), "old_flows.txt")
 DERIVA_SCOPE = 'https://auth.globus.org/scopes/app.nih-cfde.org/deriva_all'
@@ -25,6 +26,9 @@ TRANSFER_SCOPE = 'urn:globus:auth:scope:transfer.api.globus.org:all'
 CFDE_NATIVE_APP = '417301b1-5101-456a-8a27-423e71a2ae26'
 nc = fair_research_login.NativeClient(client_id=CFDE_NATIVE_APP)
 nc.login(requested_scopes=[DERIVA_SCOPE, TRANSFER_SCOPE])
+transfer_token = get_app_token(CFDE_CONFIG["DEPENDENT_SCOPES"]['transfer'])
+auth = globus_sdk.AccessTokenAuthorizer(transfer_token)
+transfer_client = globus_sdk.TransferClient(authorizer=auth)
 
 
 def load_client_config():
@@ -47,18 +51,22 @@ def flow(service):
     client_config = load_client_config()
     full_submission_flow_def["definition"]["States"]["DerivaIngest"]["ActionUrl"] = serv
     deriva_server = CFDE_CONFIG['DEFAULT_SERVER_NAME']
-
     globus_urns = list()
     submitters = get_groups(deriva_server)
+
     for submitter in submitters:
         dcc = submitter['dcc']
         dcc_name = dcc.split(':')[-1]
         for group in submitter['groups']:
-            urn = f"urn:globus:groups:id:{group['id']}"
+            gid = group['id']
+            urn = f"urn:globus:groups:id:{gid}"
             globus_urns.append(urn)
-            create_dir_if_not_exists(dcc_name, group['id'])
-    globus_urns = list(set(globus_urns))
+            group_dir = os.path.join(CFDE_CONFIG["LONG_TERM_STORAGE"], dcc_name) + "/"
+            create_dir(group_dir)
+            create_acl(group_dir, gid, "rw")
+            create_acl("/CFDE/data/", gid, "rw")
 
+    globus_urns = list(set(globus_urns))
     full_flow_deploy_res = flows_client.deploy_flow(
         flow_definition=full_submission_flow_def["definition"],
         title=full_submission_flow_def["title"],
@@ -84,7 +92,6 @@ def flow(service):
 
 @cli.command(help="Deploy client-config for public usage")
 def client_config():
-    """De"""
     cli = fair_research_login.NativeClient(client_id=native_app_id)
     scope = "https://auth.globus.org/scopes/d1e360d2-3b83-4039-bd82-f38f5bf2c394/https"
     cli.login(requested_scopes=scope)
@@ -105,30 +112,33 @@ def get_groups(servername):
     return groups
 
 
-def create_dir_if_not_exists(dcc_name, gid):
-    transfer_token = get_app_token(CFDE_CONFIG["DEPENDENT_SCOPES"]['transfer'])
-    auth = globus_sdk.AccessTokenAuthorizer(transfer_token)
-    transfer_client = globus_sdk.TransferClient(authorizer=auth)
-    dir_path = os.path.join(CFDE_CONFIG["LONG_TERM_STORAGE"], dcc_name) + "/"
+def create_dir(path):
+    try:
+        transfer_client.operation_ls(CFDE_CONFIG["GCS_ENDPOINT"], path=path)
+    except globus_sdk.exc.TransferAPIError as tapie:
+        if tapie.code != "ClientError.NotFound":
+            raise
+        transfer_client.operation_mkdir(CFDE_CONFIG["GCS_ENDPOINT"], path=path)
+
+
+def create_acl(path, group, permissions):
+    endpoint = CFDE_CONFIG['GCS_ENDPOINT']
+    existing_rules = transfer_client.endpoint_acl_list(endpoint)
+
     rule = {'DATA_TYPE': 'access',
-            'path': dir_path,
-            'permissions': 'rw',
-            'principal': gid,
+            'path': path,
+            'permissions': permissions,
+            'principal': group,
             'principal_type': 'group',
             'role_id': None,
             'role_type': None}
 
-    try:
-        transfer_client.operation_ls(CFDE_CONFIG["GCS_ENDPOINT"], path=dir_path)
-        create_dir = False
-    except globus_sdk.exc.TransferAPIError as tapie:
-        if tapie.code != "ClientError.NotFound":
-            raise
-        create_dir = True
+    for existing_rule in existing_rules:
+        existing_rule.pop("id")
+        if existing_rule == rule:
+            return
 
-    if create_dir:
-        transfer_client.operation_mkdir(CFDE_CONFIG["GCS_ENDPOINT"], path=dir_path)
-        transfer_client.add_endpoint_acl_rule(CFDE_CONFIG['GCS_ENDPOINT'], rule)
+    return transfer_client.add_endpoint_acl_rule(endpoint, rule)
 
 
 if __name__ == "__main__":
