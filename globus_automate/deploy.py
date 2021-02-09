@@ -1,5 +1,6 @@
 import click
 import collections
+import copy
 import datetime
 import fair_research_login
 import globus_automate_client
@@ -135,7 +136,10 @@ def create_acl(path, group, permissions):
 
     for existing_rule in existing_rules:
         existing_rule.pop("id")
-        if existing_rule == rule:
+        existing_rule.pop("permissions")
+        rule_copy = copy.deepcopy(rule)
+        rule_copy.pop("permissions")
+        if existing_rule == rule_copy:
             return
 
     return transfer_client.add_endpoint_acl_rule(endpoint, rule)
