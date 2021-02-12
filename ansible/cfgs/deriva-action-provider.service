@@ -3,6 +3,16 @@
 # Remember to run the following if you change this:
 # systemctl daemon-reload
 
+# SIGKILL vs SIGHUP
+# Gunicorn likes to wait for all workers to exit before stopping/restarting the
+# process. In theory setting KillSignal to SIGHUP, should allow people to finish
+# ingesting datasets before the server goes down (Should probably set --graceful-timeout
+# to the max length of a dataset ingest time). However, this takes a while and is
+# annoying on dev -- Setting KillSignal to SIGKILL will nuke everything immediately,
+# and result in fast restarts, but will cause any running ingests to fail.
+#
+# https://docs.gunicorn.org/en/stable/settings.html?highlight=sighup#graceful-timeout
+
 [Unit]
 Description=Deriva Action Provider
 After=syslog.target
@@ -15,7 +25,8 @@ RuntimeDirectory=/home/ubuntu/deriva-action-provider/
 User=ubuntu
 Group=ubuntu
 Restart=always
-KillSignal=SIGHUP
+KillSignal=SIGKILL
+# KillSignal=SIGHUP
 Type=notify
 StandardError=syslog
 NotifyAccess=all
