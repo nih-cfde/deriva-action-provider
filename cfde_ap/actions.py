@@ -9,6 +9,9 @@ from cfde_deriva.submission import Submission
 logger = logging.getLogger(__name__)
 
 
+DERIVA_INGEST_SUCCESS = 'cfde_registry_dp_status:content-ready'
+
+
 def deriva_ingest(servername, archive_url, deriva_webauthn_user,
                   dcc_id=None, globus_ep=None, action_id=None):
     """Perform an ingest to DERIVA into a catalog, using the CfdeDataPackage.
@@ -49,19 +52,14 @@ def deriva_ingest(servername, archive_url, deriva_webauthn_user,
     header_map = {
         CONFIG['ALLOWED_GCS_HTTPS_HOSTS']: {"Authorization": f"Bearer {https_token}"}
     }
-    try:
-        submission = Submission(server, registry, submission_id, dcc_id, archive_url,
-                                deriva_webauthn_user, archive_headers_map=header_map)
-        submission.ingest()
-    except Exception:
-        # Report the error to Deriva, then raise again to mark the Automate action as a failure.
-        Submission.report_external_ops_error(registry, action_id,
-                                             "Submission raised an error during ingest")
-        raise
+    submission = Submission(server, registry, submission_id, dcc_id, archive_url,
+                            deriva_webauthn_user, archive_headers_map=header_map)
+    submission.ingest()
 
     md = registry.get_datapackage(submission_id)
     return {
-        "success": True,
+        "success": md["status"] == DERIVA_INGEST_SUCCESS,
+        "error": md["diagnostics"],
         "catalog_id": submission_id,
-        "catalog_url": md['review_browse_url']
+        "catalog_url": md["review_browse_url"]
     }
