@@ -141,7 +141,7 @@ full_submission_flow_def = {
                     # "body_mimetype": "",
                     "body_template": success_email_template,
                     "body_variables": {
-                        "action_id.$": "$._context.action_id",
+                        "action_id.$": "$.DerivaIngestResult.details.submission_id",
                         "catalog_link.$": "$.DerivaIngestResult.details.deriva_link"
                     },
                     "destination.$": "$._context.email",

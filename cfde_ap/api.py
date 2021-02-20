@@ -334,6 +334,7 @@ def action_ingest(action_id, url, deriva_webauthn_user, globus_ep=None, serverna
         "status": "SUCCEEDED",
         "details": {
             "deriva_id": catalog_id,
+            "submission_id": ingest_res["submission_id"],
             # "number_ingested": insert_count,
             "deriva_link": ingest_res["catalog_url"],
             "message": "DERIVA ingest successful",
