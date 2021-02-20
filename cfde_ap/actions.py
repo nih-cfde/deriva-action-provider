@@ -60,6 +60,6 @@ def deriva_ingest(servername, archive_url, deriva_webauthn_user,
     return {
         "success": md["status"] == DERIVA_INGEST_SUCCESS,
         "error": md["diagnostics"],
-        "catalog_id": submission_id,
+        "submission_id": submission_id,
         "catalog_url": md["review_browse_url"]
     }
