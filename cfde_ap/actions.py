@@ -57,9 +57,15 @@ def deriva_ingest(servername, archive_url, deriva_webauthn_user,
     submission.ingest()
 
     md = registry.get_datapackage(submission_id)
+    success = md["status"] == DERIVA_INGEST_SUCCESS
     return {
-        "success": md["status"] == DERIVA_INGEST_SUCCESS,
-        "error": md["diagnostics"],
+        # status must be a valid automate status ['SUCCEEDED', 'FAILED', 'ACTIVE', 'INACTIVE']
+        "status": "SUCCEEDED" if success else "FAILED",
+        # Note: The automate flow expects an error to be False if there are no errors.
+        # Below ensures in any falsy value from the registry to set error=False so
+        # Automate knows there are no errors.
+        "error": md.get('diagnostics') or False,
+        "message": "DERIVA ingest successful" if success else "",
         "submission_id": submission_id,
-        "catalog_url": md["review_browse_url"]
+        "submission_link": md["review_browse_url"]
     }
