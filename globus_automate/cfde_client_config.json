@@ -15,7 +15,7 @@
             "cfde_ep_url": "https://g-882990.aa98d.08cc.data.globus.org"
         },
         "staging": {
-            "flow_id": "70eb248c-b756-41f0-8edb-15a4a080c19d",
+            "flow_id": "29f3b439-254a-46fd-92cc-45f4d709a23d",
             "success_step": "SuccessState",
             "failure_step": "FailureState",
             "error_step": "ErrorState",
@@ -24,7 +24,7 @@
             "cfde_ep_url": "https://g-3368fe.c0aba.03c0.data.globus.org"
         },
         "dev": {
-            "flow_id": "f0bf7278-cf73-458e-a6ea-54c4b994099d",
+            "flow_id": "37b5fe50-9abd-47d0-b372-a5687ab8d8e6",
             "success_step": "SuccessState",
             "failure_step": "FailureState",
             "error_step": "ErrorState",
