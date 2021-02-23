@@ -1,5 +1,5 @@
 import logging
-from deriva.core import DerivaServer
+from deriva.core import DerivaServer, DEFAULT_SESSION_CONFIG
 
 from cfde_ap import CONFIG
 from cfde_ap.auth import get_app_token
@@ -32,6 +32,8 @@ def deriva_ingest(servername, archive_url, deriva_webauthn_user,
     credential = {
         "bearer-token": get_app_token(CONFIG["DEPENDENT_SCOPES"]["deriva_all"])
     }
+    session_config = DEFAULT_SESSION_CONFIG.copy()
+    session_config["allow_retry_on_all_methods"] = True
     registry = Registry('https', servername, credentials=credential)
     server = DerivaServer('https', servername, credential)
 
