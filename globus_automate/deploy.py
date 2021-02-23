@@ -44,7 +44,7 @@ def cli():
 
 @cli.command(help="Deploy the latest flow definition in flow.py")
 @click.option("--service", default="dev")  # , hidden=True)
-def flow(service):
+def deploy_flow(service):
     """Deploy the latest flow, and track the id in cfde_client_config. Old flows
     are not automatically deleted, and are tracked in old_flows_filename"""
     flows_client = globus_automate_client.create_flows_client(native_app_id)
@@ -52,28 +52,25 @@ def flow(service):
     client_config = load_client_config()
     full_submission_flow_def["definition"]["States"]["DerivaIngest"]["ActionUrl"] = serv
     deriva_server = CFDE_CONFIG['DEFAULT_SERVER_NAME']
-    globus_urns = list()
-    submitters = get_groups(deriva_server)
 
-    for submitter in submitters:
-        dcc = submitter['dcc']
-        dcc_name = dcc.split(':')[-1]
-        for group in submitter['groups']:
-            gid = group['id']
-            urn = f"urn:globus:groups:id:{gid}"
-            globus_urns.append(urn)
-            group_dir = os.path.join(CFDE_CONFIG["LONG_TERM_STORAGE"], dcc_name) + "/"
-            create_dir(group_dir)
-            create_acl(group_dir, gid, "r")
-            create_acl("/CFDE/data/", gid, "rw")
+    admins = get_groups(deriva_server, 'admin')
+    submitters = get_groups(deriva_server, 'submitter')
+    reviewers = get_groups(deriva_server, 'reviewer')
+    approvers = get_groups(deriva_server, 'approver')
 
-    globus_urns = list(set(globus_urns))
+    writers = [admins, submitters]
+    flow_runnable_urns = set_acls_from_groups(writers, "rw")
+
+    readers = [reviewers, approvers]
+    set_acls_from_groups(readers, "r")
+
+    flow_runnable_urns = list(set(flow_runnable_urns))
     full_flow_deploy_res = flows_client.deploy_flow(
         flow_definition=full_submission_flow_def["definition"],
         title=full_submission_flow_def["title"],
         description=full_submission_flow_def["description"],
-        visible_to=globus_urns,
-        runnable_by=globus_urns,
+        visible_to=flow_runnable_urns,
+        runnable_by=flow_runnable_urns,
     )
     click.secho(f"[{service}] Flow Deployed: {full_flow_deploy_res['id']}", fg="green")
 
@@ -92,7 +89,7 @@ def flow(service):
 
 
 @cli.command(help="Deploy client-config for public usage")
-def client_config():
+def deploy_client_config():
     cli = fair_research_login.NativeClient(client_id=native_app_id)
     scope = "https://auth.globus.org/scopes/d1e360d2-3b83-4039-bd82-f38f5bf2c394/https"
     cli.login(requested_scopes=scope)
@@ -104,12 +101,41 @@ def client_config():
     click.secho(f"Client Config Deployed: '{url}'", fg="green")
 
 
-def get_groups(servername):
+@cli.command(help="Ensure client config is the latest shown here")
+def check_config():
+    if get_remote_config() == load_client_config():
+        click.secho('Remote Config is up to date with local config', fg='green')
+    else:
+        click.secho(f'Remote config differs from local config: {client_config_filename}', fg='red')
+
+
+@cli.command(help="Download remote config")
+def download_config():
+    if input(f'Overwrite {client_config_filename}? (y/n)> ') == 'y':
+        with open(client_config_filename, 'w+') as f:
+            f.write(json.dumps(get_remote_config(), indent=4))
+        click.secho(f'Saved to {client_config_filename}', fg='green')
+
+
+def get_remote_config():
+    cli = fair_research_login.NativeClient(client_id=native_app_id)
+    scope = "https://auth.globus.org/scopes/d1e360d2-3b83-4039-bd82-f38f5bf2c394/https"
+    cli.login(requested_scopes=scope)
+    headers = {"Authorization": f"Bearer {cli.load_tokens_by_scope()[scope]['access_token']}",
+               "X-Requested-With": "XMLHttpRequest"}
+    url = ("https://g-5cf005.aa98d.08cc.data.globus.org/submission_dynamic_config/"
+           "cfde_client_config.json")
+    resp = requests.get(url, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_groups(servername, role):
     credentials = {
         "bearer-token": nc.load_tokens_by_scope()[DERIVA_SCOPE]['access_token']
     }
     registry = Registry('https', servername, credentials=credentials)
-    groups = registry.get_groups_by_dcc_role(role_id='cfde_registry_grp_role:submitter')
+    groups = registry.get_groups_by_dcc_role(role_id=f'cfde_registry_grp_role:{role}')
     return groups
 
 
@@ -143,6 +169,23 @@ def create_acl(path, group, permissions):
             return
 
     return transfer_client.add_endpoint_acl_rule(endpoint, rule)
+
+
+def set_acls_from_groups(group_lists, cfde_data_permissions):
+    urns = list()
+    for group_list in group_lists:
+        for dcc_dict in group_list:
+            dcc = dcc_dict['dcc']
+            dcc_name = dcc.split(':')[-1]
+            for group in dcc_dict['groups']:
+                gid = group['id']
+                urn = f"urn:globus:groups:id:{gid}"
+                urns.append(urn)
+                group_dir = os.path.join(CFDE_CONFIG["LONG_TERM_STORAGE"], dcc_name) + "/"
+                create_dir(group_dir)
+                create_acl(group_dir, gid, "r")
+                create_acl("/CFDE/data/", gid, cfde_data_permissions)
+    return urns
 
 
 if __name__ == "__main__":
