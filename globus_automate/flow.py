@@ -4,13 +4,13 @@ sender_email = "cfde-submission@nih-cfde.org"
 admin_email = "nick@globus.org"
 smtp_hostname = "email-smtp.us-east-1.amazonaws.com"
 
-failure_text = ("'Your CFDE submission (' + action_id + ') failed to ingest into DERIVA "
+failure_text = ("'Your CFDE submission (' + submission_id + ') failed to ingest into DERIVA "
                 "with this error:\\n' + error")
 
-success_email_template = ("Your CFDE submission ($action_id) has been successfully ingested, "
-                          "and can be viewed here: $catalog_link \n Thank you.")
+success_email_template = ("Your CFDE submission ($submission_id) has been successfully ingested, "
+                          "and can be viewed here: $submission_link \n Thank you.")
 
-test_sub_success_template = ("Your test CFDE submission ($action_id) was successfully tested with DERIVA. "
+test_sub_success_template = ("Your test CFDE submission ($submission_id) was successfully tested with DERIVA. "
                              "No errors were encountered.")
 
 full_submission_flow_def = {
@@ -101,7 +101,7 @@ full_submission_flow_def = {
                     "operation": "ingest",
                     "globus_ep.$": "$.cfde_ep_id",
                     # "server": "demo.derivacloud.org",
-                    # "catalog_id.$": ,
+                    # "submission_id.$": ,
                     "dcc_id.$": "$.dcc_id",
                     "test_sub.$": "$.test_sub"
                 },
@@ -141,8 +141,8 @@ full_submission_flow_def = {
                     # "body_mimetype": "",
                     "body_template": success_email_template,
                     "body_variables": {
-                        "action_id.$": "$.DerivaIngestResult.details.submission_id",
-                        "catalog_link.$": "$.DerivaIngestResult.details.deriva_link"
+                        "submission_id.$": "$.DerivaIngestResult.details.submission_id",
+                        "submission_link.$": "$.DerivaIngestResult.details.submission_link"
                     },
                     "destination.$": "$._context.email",
                     # "notification_method": "",
@@ -175,23 +175,17 @@ full_submission_flow_def = {
                 "ExceptionOnActionFailure": True,
                 "Parameters": {
                     "expressions": [{
-                        "expression": "catalog_link",
+                        "expression": "submission_link",
                         "arguments": {
-                            "catalog_link.$": "$.DerivaIngestResult.details.deriva_link"
+                            "submission_link.$": "$.DerivaIngestResult.details.submission_link"
                         },
-                        "result_path": "deriva_link"
+                        "result_path": "submission_link"
                     }, {
-                        "expression": "catalog_id",
+                        "expression": ("'Submission Flow succeeded. Your submission ID is ' + str(submission_id) + "
+                                       "', and your submission can be viewed at this link: ' + submission_link"),
                         "arguments": {
-                            "catalog_id.$": "$.DerivaIngestResult.details.deriva_id"
-                        },
-                        "result_path": "deriva_id"
-                    }, {
-                        "expression": ("'Submission Flow succeeded. Your catalog ID is ' + str(catalog_id) + "
-                                       "', and your submission can be viewed at this link: ' + catalog_link"),
-                        "arguments": {
-                            "catalog_link.$": "$.DerivaIngestResult.details.deriva_link",
-                            "catalog_id.$": "$.DerivaIngestResult.details.deriva_id"
+                            "submission_link.$": "$.DerivaIngestResult.details.submission_link",
+                            "submission_id.$": "$.DerivaIngestResult.details.submission_id"
                         },
                         "result_path": "message"
                     }]
@@ -246,18 +240,6 @@ full_submission_flow_def = {
                 "ExceptionOnActionFailure": True,
                 "Parameters": {
                     "expressions": [{
-                        "expression": "catalog_link",
-                        "arguments": {
-                            "catalog_link": "None"
-                        },
-                        "result_path": "deriva_link"
-                    }, {
-                        "expression": "catalog_id",
-                        "arguments": {
-                            "catalog_id": "None"
-                        },
-                        "result_path": "deriva_id"
-                    }, {
                         "expression": "'Test Submission Flow succeeded. No DERIVA errors were encountered.'",
                         "result_path": "message"
                     }]
@@ -279,7 +261,7 @@ full_submission_flow_def = {
                     "expressions": [{
                         "expression": failure_text,
                         "arguments": {
-                            "action_id.$": "$._context.action_id",
+                            "submission_id.$": "$.DerivaIngestResult.details.submission_id",
                             "error.$": "$.DerivaIngestResult.details.error"
                         },
                         "result_path": "error"
@@ -332,10 +314,9 @@ full_submission_flow_def = {
                 "ExceptionOnActionFailure": True,
                 "Parameters": {
                     # "body_mimetype": "",
-                    "body_template.=": ("A CFDE Flow has errored. Please check the log for this Flow:\n"
-                                        "Flow instance ID: `$._context.action_id`.\n\nNOTE: The catalog "
-                                        "for this submission has not been deleted, to aid debugging. "
-                                        "Please manually delete the catalog when convenient."),
+                    "body_template.=": ("A CFDE Flow has encountered an error. Please contact your administrator "
+                                        "and provide the UUID below to aid in debugging\n"
+                                        "Flow instance ID: `$._context.action_id`.\n\n"),
                     "destination": admin_email,
                     # "notification_method": "",
                     # "notification_priority": "low",
@@ -382,9 +363,11 @@ full_submission_flow_def = {
         }
     },
     "description": ("Run the CFDE submission flow."),
-    "runnable_by": ["urn:globus:groups:id:a437abe3-c9a4-11e9-b441-0efb3ba9a670"],  # CFDE DERIVA Demo
+    # runnable_by and visible_to are dynamically set with values in each Deriva app instance
+    # when running the deploy.py script.
+    # "runnable_by": ["urn:globus:groups:id:a437abe3-c9a4-11e9-b441-0efb3ba9a670"],  # CFDE DERIVA Demo
+    # "visible_to": ["urn:globus:groups:id:a437abe3-c9a4-11e9-b441-0efb3ba9a670"]  # CFDE DERIVA Demo
     "synchronous": False,
     "title": "CFDE Submission",
     "types": ["Action", "Choice"],
-    "visible_to": ["urn:globus:groups:id:a437abe3-c9a4-11e9-b441-0efb3ba9a670"]  # CFDE DERIVA Demo
 }

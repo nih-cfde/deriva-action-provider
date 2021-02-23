@@ -287,66 +287,33 @@ def cancel_action(action_id):
 
 
 def action_ingest(action_id, url, deriva_webauthn_user, globus_ep=None, servername=None, dcc_id=None):
-    # Download ingest BDBag
-    # Excessive try-except blocks because there's (currently) no process management;
-    # if the action fails, it needs to always self-report failure
-
     if not servername:
         servername = CONFIG["DEFAULT_SERVER_NAME"]
 
-    url = transfer.move_to_protected_location(url, action_id, dcc_id)
-
-    # Ingest into Deriva
-    logger.debug(f"{action_id}: Ingesting into Deriva")
-    try:
-        ingest_res = actions.deriva_ingest(servername, url, deriva_webauthn_user,
-                                           dcc_id=dcc_id, globus_ep=globus_ep, action_id=action_id)
-        if not ingest_res["success"]:
-            error_status = {
-                "status": "FAILED",
-                "details": {
-                    "error": f"Unable to ingest to DERIVA: {ingest_res.get('error')}"
-                }
-            }
-            utils.update_action_status(TBL, action_id, error_status)
-            return
-        submission_id = ingest_res["submission_id"]
-    except Exception as e:
-        logger.exception(e)
-        error_status = {
-            "status": "FAILED",
-            "details": {
-                "error": f"Error ingesting to DERIVA: {str(e)}"
-            }
-        }
-        logger.error(f"{action_id}: Error ingesting to DERIVA: {repr(e)}")
-        try:
-            utils.update_action_status(TBL, action_id, error_status)
-        except Exception as e2:
-            with open("ERROR.log", 'w') as out:
-                out.write(f"Error updating status on {action_id}: '{repr(e2)}'\n\n"
-                          f"After error '{repr(e)}'")
-        return
-
-    # Successful ingest
-    logger.debug(f"{action_id}: Catalog {dcc_id} populated")
+    # The flow can have unexpected failures if any of the keys in "details" below are absent.
+    # They're filled in with blank values to ensure the flow doesn't panic if we run into
+    # unforeseen circumstances.
     status = {
-        "status": "SUCCEEDED",
+        "status": "FAILED",
         "details": {
-            "submission_id": submission_id,
-            # "number_ingested": insert_count,
-            "deriva_link": ingest_res["catalog_url"],
-            "message": "DERIVA ingest successful",
-            "error": False
+            "submission_id": "",
+            "submission_link": "",
+            "message": "",
+            "error": "Failed due to unknown error"
         }
     }
     try:
-        utils.update_action_status(TBL, action_id, status)
+        logger.debug("Moving data to protected location")
+        url = transfer.move_to_protected_location(url, action_id, dcc_id)
+        logger.debug("Ingesting into Deriva")
+        ingest_res = actions.deriva_ingest(servername, url, deriva_webauthn_user,
+                                           dcc_id=dcc_id, globus_ep=globus_ep, action_id=action_id)
+        status["status"] = ingest_res.pop("status")
+        status["details"].update(ingest_res)
     except Exception as e:
-        with open("ERROR.log", 'w') as out:
-            out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
-                      f"After success on ID '{submission_id}'")
-
-    # Remove ingested files from disk
-    # Failed ingests are not removed, which helps debugging
-    return
+        logger.exception(e)
+        logger.error("Submission marked as FAILED due to the exception above.")
+        status["status"] = "FAILED"
+        status["error"] = f"Error ingesting to DERIVA: {str(e)}"
+    finally:
+        utils.update_action_status(TBL, action_id, status)
