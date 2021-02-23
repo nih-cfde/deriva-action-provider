@@ -88,6 +88,24 @@ def deploy_flow(service):
     "https://pypi.org/pypi/cfde-submit/json"
 
 
+@cli.command(help="Update the existing flow ID for a service with new definition changes")
+@click.option("--service", default="dev")  # , hidden=True)
+def update_flow(service):
+    flows_client = globus_automate_client.create_flows_client(native_app_id)
+    serv = deriva_aps[service]
+    client_config = load_client_config()
+    flow_id = client_config["FLOWS"][service]["flow_id"]
+    full_submission_flow_def["definition"]["States"]["DerivaIngest"]["ActionUrl"] = serv
+
+
+    flows_client.update_flow(
+        flow_id,
+        full_submission_flow_def["definition"],
+    )
+    click.secho(f'Updated flow {flow_id}', fg='green')
+    click.secho('NOTE: No provisioning took place. If any dependent scopes were added to the flow, '
+                'this may result in any future flow instances failing', fg='yellow')
+
 @cli.command(help="Deploy client-config for public usage")
 def deploy_client_config():
     cli = fair_research_login.NativeClient(client_id=native_app_id)
