@@ -44,7 +44,7 @@ def cli():
 
 @cli.command(help="Deploy the latest flow definition in flow.py")
 @click.option("--service", default="dev")  # , hidden=True)
-def flow(service):
+def deploy_flow(service):
     """Deploy the latest flow, and track the id in cfde_client_config. Old flows
     are not automatically deleted, and are tracked in old_flows_filename"""
     flows_client = globus_automate_client.create_flows_client(native_app_id)
@@ -92,7 +92,7 @@ def flow(service):
 
 
 @cli.command(help="Deploy client-config for public usage")
-def client_config():
+def deploy_client_config():
     cli = fair_research_login.NativeClient(client_id=native_app_id)
     scope = "https://auth.globus.org/scopes/d1e360d2-3b83-4039-bd82-f38f5bf2c394/https"
     cli.login(requested_scopes=scope)
@@ -102,6 +102,35 @@ def client_config():
     put_res = requests.put(url, json=load_client_config(), headers=headers)
     put_res.raise_for_status()
     click.secho(f"Client Config Deployed: '{url}'", fg="green")
+
+
+@cli.command(help="Ensure client config is the latest shown here")
+def check_config():
+    if get_remote_config() == load_client_config():
+        click.secho('Remote Config is up to date with local config', fg='green')
+    else:
+        click.secho(f'Remote config differs from local config: {client_config_filename}', fg='red')
+
+
+@cli.command(help="Download remote config")
+def download_config():
+    if input(f'Overwrite {client_config_filename}? (y/n)> ') == 'y':
+        with open(client_config_filename, 'w+') as f:
+            f.write(json.dumps(get_remote_config(), indent=4))
+        click.secho(f'Saved to {client_config_filename}', fg='green')
+
+
+def get_remote_config():
+    cli = fair_research_login.NativeClient(client_id=native_app_id)
+    scope = "https://auth.globus.org/scopes/d1e360d2-3b83-4039-bd82-f38f5bf2c394/https"
+    cli.login(requested_scopes=scope)
+    headers = {"Authorization": f"Bearer {cli.load_tokens_by_scope()[scope]['access_token']}",
+               "X-Requested-With": "XMLHttpRequest"}
+    url = ("https://g-5cf005.aa98d.08cc.data.globus.org/submission_dynamic_config/"
+           "cfde_client_config.json")
+    resp = requests.get(url, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def get_groups(servername):
