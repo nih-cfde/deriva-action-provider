@@ -310,7 +310,7 @@ def action_ingest(action_id, url, deriva_webauthn_user, globus_ep=None, serverna
             }
             utils.update_action_status(TBL, action_id, error_status)
             return
-        catalog_id = ingest_res["catalog_id"]
+        submission_id = ingest_res["submission_id"]
     except Exception as e:
         logger.exception(e)
         error_status = {
@@ -333,7 +333,7 @@ def action_ingest(action_id, url, deriva_webauthn_user, globus_ep=None, serverna
     status = {
         "status": "SUCCEEDED",
         "details": {
-            "deriva_id": catalog_id,
+            "submission_id": submission_id,
             # "number_ingested": insert_count,
             "deriva_link": ingest_res["catalog_url"],
             "message": "DERIVA ingest successful",
@@ -345,7 +345,7 @@ def action_ingest(action_id, url, deriva_webauthn_user, globus_ep=None, serverna
     except Exception as e:
         with open("ERROR.log", 'w') as out:
             out.write(f"Error updating status on {action_id}: '{repr(e)}'\n\n"
-                      f"After success on ID '{catalog_id}'")
+                      f"After success on ID '{submission_id}'")
 
     # Remove ingested files from disk
     # Failed ingests are not removed, which helps debugging
