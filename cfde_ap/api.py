@@ -314,6 +314,6 @@ def action_ingest(action_id, url, deriva_webauthn_user, globus_ep=None, serverna
         logger.exception(e)
         logger.error("Submission marked as FAILED due to the exception above.")
         status["status"] = "FAILED"
-        status["error"] = f"Error ingesting to DERIVA: {str(e)}"
+        status["details"]["error"] = f"Error ingesting to DERIVA: {str(e)}"
     finally:
         utils.update_action_status(TBL, action_id, status)
