@@ -1,12 +1,15 @@
 import logging
-from deriva.core import DerivaServer
+from deriva.core import DerivaServer, DEFAULT_SESSION_CONFIG
 
 from cfde_ap import CONFIG
-from cfde_ap.auth import get_dependent_token, get_webauthn_user
+from cfde_ap.auth import get_app_token
 from cfde_deriva.registry import Registry
 from cfde_deriva.submission import Submission
 
 logger = logging.getLogger(__name__)
+
+
+DERIVA_INGEST_SUCCESS = 'cfde_registry_dp_status:content-ready'
 
 
 def deriva_ingest(servername, archive_url, deriva_webauthn_user,
@@ -27,12 +30,13 @@ def deriva_ingest(servername, archive_url, deriva_webauthn_user,
             catalog_id (str): The catalog's ID.
     """
     credential = {
-        "bearer-token": get_dependent_token(CONFIG["DEPENDENT_SCOPES"]["deriva_all"])
+        "bearer-token": get_app_token(CONFIG["DEPENDENT_SCOPES"]["deriva_all"])
     }
-    registry = Registry('https', servername, credentials=credential)
-    server = DerivaServer('https', servername, credential)
+    session_config = DEFAULT_SESSION_CONFIG.copy()
+    session_config["allow_retry_on_all_methods"] = True
+    registry = Registry('https', servername, credentials=credential, session_config=session_config)
+    server = DerivaServer('https', servername, credential, session_config=session_config)
 
-    https_token = get_dependent_token(f'https://auth.globus.org/scopes/{globus_ep}/https')
     # the Globus action_id is used as the Submission id, this allows us to track submissions
     # in Deriva back to an action.
     submission_id = action_id
@@ -46,16 +50,24 @@ def deriva_ingest(servername, archive_url, deriva_webauthn_user,
     # match, otherwise the Submission() client will attempt to download the Globus GCS Auth
     # login page instead. r"https://[^/]*[.]data[.]globus[.]org/.*" will match most GCS HTTP pages,
     # but if a custom domain is used this MUST be updated to use that instead.
+    https_token = get_app_token(f'https://auth.globus.org/scopes/{globus_ep}/https')
     header_map = {
         CONFIG['ALLOWED_GCS_HTTPS_HOSTS']: {"Authorization": f"Bearer {https_token}"}
     }
-    submission = Submission(server, registry, submission_id, dcc_id, archive_url, deriva_webauthn_user,
-                            archive_headers_map=header_map)
+    submission = Submission(server, registry, submission_id, dcc_id, archive_url,
+                            deriva_webauthn_user, archive_headers_map=header_map)
     submission.ingest()
 
     md = registry.get_datapackage(submission_id)
+    success = md["status"] == DERIVA_INGEST_SUCCESS
     return {
-        "success": True,
-        "catalog_id": submission_id,
-        "catalog_url": md['review_browse_url']
+        # status must be a valid automate status ['SUCCEEDED', 'FAILED', 'ACTIVE', 'INACTIVE']
+        "status": "SUCCEEDED" if success else "FAILED",
+        # Note: The automate flow expects an error to be False if there are no errors.
+        # Below ensures in any falsy value from the registry to set error=False so
+        # Automate knows there are no errors.
+        "error": md.get('diagnostics') or False,
+        "message": "DERIVA ingest successful" if success else "",
+        "submission_id": submission_id,
+        "submission_link": md["review_browse_url"]
     }
