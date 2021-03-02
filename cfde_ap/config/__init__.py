@@ -25,7 +25,7 @@ CONFIG = dict_merge(KEYS, CONFIG)
 server = os.environ.get("FLASK_ENV")
 if server == "prod":
     CONFIG = dict_merge(PROD, CONFIG)
-if server == "staging":
+elif server == "staging":
     CONFIG = dict_merge(STAGING, CONFIG)
 elif server == "dev":
     CONFIG = dict_merge(DEV, CONFIG)
