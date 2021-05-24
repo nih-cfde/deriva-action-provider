@@ -6,7 +6,7 @@
     },
     "FLOWS": {
         "prod": {
-            "flow_id": "c636de1b-c7a8-4a93-bdec-ab4720328564",
+            "flow_id": "38610194-d5d9-4b5c-9487-710c50d67ffd",
             "success_step": "SuccessState",
             "failure_step": "FailureState",
             "error_step": "ErrorState",
@@ -15,7 +15,7 @@
             "cfde_ep_url": "https://g-882990.aa98d.08cc.data.globus.org"
         },
         "staging": {
-            "flow_id": "081ac022-ca14-4c41-b808-b33ff2501bb1",
+            "flow_id": "f2b5d5b7-6c56-4480-9fab-4d2f1e12cce2",
             "success_step": "SuccessState",
             "failure_step": "FailureState",
             "error_step": "ErrorState",
@@ -24,7 +24,7 @@
             "cfde_ep_url": "https://g-3368fe.c0aba.03c0.data.globus.org"
         },
         "dev": {
-            "flow_id": "0322654c-8ce5-49a2-909d-828aeb904eac",
+            "flow_id": "352841c2-d7aa-4be3-a5fe-46e628176cca",
             "success_step": "SuccessState",
             "failure_step": "FailureState",
             "error_step": "ErrorState",
